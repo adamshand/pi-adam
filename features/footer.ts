@@ -17,9 +17,9 @@ function getAssistantUsage(message: unknown): AssistantUsage | undefined {
 	return (message as MessageWithUsage).usage;
 }
 
-function formatCompactNumber(n: number): string {
-	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-	if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+function formatCompactNumber(n: number, decimals = 1): string {
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(decimals)}M`;
+	if (n >= 1000) return `${(n / 1000).toFixed(decimals)}k`;
 	return `${n}`;
 }
 
@@ -94,13 +94,13 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 					if (ctxLimit > 0) {
 						const pct = (ctxTokens / ctxLimit) * 100;
 						const color = pct > 80 ? "error" : pct > 50 ? "warning" : "success";
-						contextPct = theme.fg(color, `${pct.toFixed(1)}%`) + theme.fg("dim", `/${formatCompactNumber(ctxLimit)}`);
+						contextPct = theme.fg(color, `${pct.toFixed(1)}%`);
 					}
 
-					const arrowUp = theme.fg("success", "↑") + theme.fg("text", formatCompactNumber(input));
-					const arrowDown = theme.fg("error", "↓") + theme.fg("text", formatCompactNumber(output));
-					const reasoningStr = reasoning > 0 ? theme.fg("accent", "R") + theme.fg("text", formatCompactNumber(reasoning)) : "";
-					const costStr = theme.fg("warning", `$${cost.toFixed(3)}`);
+					const arrowUp = theme.fg("success", "↑") + theme.fg("text", formatCompactNumber(input, 0));
+					const arrowDown = theme.fg("error", "↓") + theme.fg("text", formatCompactNumber(output, 0));
+					const reasoningStr = reasoning > 0 ? theme.fg("accent", "R") + theme.fg("text", formatCompactNumber(reasoning, 0)) : "";
+					const costStr = theme.fg("warning", `$${cost.toFixed(2)}`);
 					const speedStr = lastSpeed !== null ? theme.fg("mdLink", `${formatCompactNumber(lastSpeed)} t/s`) : "";
 					const codexUsage = getCodexUsage();
 					const colorizeCodexUsage = (used: number | undefined) => {
