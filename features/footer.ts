@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { registerCodexUsageFeature } from "./codex-usage.ts";
 
 type AssistantUsage = {
 	input?: number;
@@ -28,6 +29,7 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 	let lastSpeed: number | null = null;
 	let assistantStartTime: number | null = null;
 	let requestFooterRender: (() => void) | undefined;
+	const getCodexUsage = registerCodexUsageFeature(pi, () => requestFooterRender?.());
 
 	pi.on("thinking_level_select", (event) => {
 		thinkingLevel = event.level;
@@ -100,6 +102,24 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 					const reasoningStr = reasoning > 0 ? theme.fg("accent", "R") + theme.fg("text", formatCompactNumber(reasoning)) : "";
 					const costStr = theme.fg("warning", `$${cost.toFixed(3)}`);
 					const speedStr = lastSpeed !== null ? theme.fg("mdLink", `${formatCompactNumber(lastSpeed)} t/s`) : "";
+					const codexUsage = getCodexUsage();
+					const colorizeCodexUsage = (used: number | undefined) => {
+						const text = used === undefined ? "?%" : `${Math.round(used)}%`;
+						if (used === undefined) return theme.fg("muted", text);
+						if (used >= 90) return theme.fg("error", text);
+						if (used >= 70) return theme.fg("warning", text);
+						return theme.fg("success", text);
+					};
+					const codexStr = codexUsage
+						? [
+								theme.fg("accent", "codex"),
+								`${theme.fg("dim", "5h ")}${colorizeCodexUsage(codexUsage.fiveHourUsed)}`,
+								`${theme.fg("dim", "wk ")}${colorizeCodexUsage(codexUsage.weeklyUsed)}`,
+								codexUsage.availableResets !== undefined
+									? `${theme.fg("dim", "↺")}${theme.fg("muted", String(codexUsage.availableResets))}`
+									: "",
+							].filter(Boolean).join(" ")
+						: "";
 
 					const levelColors: Record<string, Parameters<typeof theme.fg>[0]> = {
 						off: "thinkingOff",
@@ -115,7 +135,7 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 					const branch = footerData.getGitBranch();
 					const gitStr = branch ? theme.fg("toolDiffAdded", ` ${branch}`) : "";
 
-					const left = [arrowUp, arrowDown, reasoningStr, costStr, contextPct, speedStr].filter(Boolean).join(sep);
+					const left = [arrowUp, arrowDown, reasoningStr, costStr, contextPct, speedStr, codexStr].filter(Boolean).join(sep);
 					const right = [modelStr, `${levelDot} ${levelStr}`, gitStr]
 						.filter(Boolean)
 						.join(" " + theme.fg("dim", "•") + " ");
