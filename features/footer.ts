@@ -5,7 +5,7 @@ import { registerCodexUsageFeature } from "./codex-usage.ts";
 type AssistantUsage = {
 	input?: number;
 	output?: number;
-	reasoningTokens?: number;
+	reasoning?: number;
 	cost?: { total?: number };
 };
 
@@ -82,7 +82,7 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 							input += usage?.input ?? 0;
 							output += usage?.output ?? 0;
 							cost += usage?.cost?.total ?? 0;
-							reasoning += usage?.reasoningTokens ?? 0;
+							reasoning += usage?.reasoning ?? 0;
 						}
 					}
 
@@ -112,7 +112,6 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 					};
 					const codexStr = codexUsage
 						? [
-								theme.fg("accent", "codex"),
 								`${theme.fg("dim", "5h ")}${colorizeCodexUsage(codexUsage.fiveHourUsed)}`,
 								`${theme.fg("dim", "wk ")}${colorizeCodexUsage(codexUsage.weeklyUsed)}`,
 								codexUsage.availableResets !== undefined
@@ -135,7 +134,7 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 					const branch = footerData.getGitBranch();
 					const gitStr = branch ? theme.fg("toolDiffAdded", ` ${branch}`) : "";
 
-					const left = [arrowUp, arrowDown, reasoningStr, costStr, contextPct, speedStr, codexStr].filter(Boolean).join(sep);
+					const left = [arrowUp, arrowDown, speedStr, costStr, reasoningStr, contextPct, codexStr].filter(Boolean).join(sep);
 					const right = [modelStr, `${levelDot} ${levelStr}`, gitStr]
 						.filter(Boolean)
 						.join(" " + theme.fg("dim", "•") + " ");
