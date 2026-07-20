@@ -6,11 +6,13 @@ type RateLimitWindow = {
 	limit_window_seconds?: number;
 };
 
+export type RateLimit = {
+	primary_window?: RateLimitWindow | null;
+	secondary_window?: RateLimitWindow | null;
+};
+
 type CodexUsageResponse = {
-	rate_limit?: {
-		primary_window?: RateLimitWindow;
-		secondary_window?: RateLimitWindow;
-	};
+	rate_limit?: RateLimit;
 };
 
 type ResetCreditsResponse = {
@@ -67,6 +69,32 @@ async function getJson<T>(path: string, accessToken: string, accountId?: string)
 	return (await response.json()) as T;
 }
 
+export function snapshotFromRateLimit(rateLimit: RateLimit | undefined): CodexUsageSnapshot {
+	const primary = rateLimit?.primary_window ?? undefined;
+	const secondary = rateLimit?.secondary_window ?? undefined;
+	const windows = [primary, secondary].filter((window): window is RateLimitWindow => window !== undefined);
+
+	// OpenAI does not guarantee that primary means 5-hour and secondary means weekly.
+	// Some plans now return only a weekly window in primary_window.
+	const fiveHour = windows.find(
+		(window) => typeof window.limit_window_seconds === "number" && window.limit_window_seconds <= 24 * 60 * 60,
+	);
+	const weekly = windows.find(
+		(window) => typeof window.limit_window_seconds === "number" && window.limit_window_seconds > 24 * 60 * 60,
+	);
+
+	// Preserve the legacy positional mapping when the API omits window durations.
+	const fallbackFiveHour = fiveHour ?? (primary?.limit_window_seconds === undefined ? primary : undefined);
+	const fallbackWeekly = weekly ?? (secondary?.limit_window_seconds === undefined ? secondary : undefined);
+
+	return {
+		fiveHourUsed: typeof fallbackFiveHour?.used_percent === "number" ? fallbackFiveHour.used_percent : undefined,
+		weeklyUsed: typeof fallbackWeekly?.used_percent === "number" ? fallbackWeekly.used_percent : undefined,
+		fiveHourResetAt: typeof fallbackFiveHour?.reset_at === "number" ? fallbackFiveHour.reset_at : undefined,
+		weeklyResetAt: typeof fallbackWeekly?.reset_at === "number" ? fallbackWeekly.reset_at : undefined,
+	};
+}
+
 async function loadSnapshot(ctx: ExtensionContext): Promise<CodexUsageSnapshot> {
 	const accessToken = await ctx.modelRegistry.getApiKeyForProvider("openai-codex");
 	if (!accessToken) throw new Error('No Pi auth found for provider "openai-codex". Use /login first.');
@@ -77,13 +105,8 @@ async function loadSnapshot(ctx: ExtensionContext): Promise<CodexUsageSnapshot> 
 	]);
 	if (usageResult.status === "rejected") throw usageResult.reason;
 
-	const primary = usageResult.value.rate_limit?.primary_window;
-	const secondary = usageResult.value.rate_limit?.secondary_window;
 	return {
-		fiveHourUsed: typeof primary?.used_percent === "number" ? primary.used_percent : undefined,
-		weeklyUsed: typeof secondary?.used_percent === "number" ? secondary.used_percent : undefined,
-		fiveHourResetAt: typeof primary?.reset_at === "number" ? primary.reset_at : undefined,
-		weeklyResetAt: typeof secondary?.reset_at === "number" ? secondary.reset_at : undefined,
+		...snapshotFromRateLimit(usageResult.value.rate_limit),
 		availableResets:
 			creditsResult.status === "fulfilled" && typeof creditsResult.value.available_count === "number"
 				? creditsResult.value.available_count
@@ -139,9 +162,9 @@ export function registerCodexUsageFeature(pi: ExtensionAPI, onChange: () => void
 				ctx.ui.notify(lastError ?? "Codex usage unavailable", "error");
 				return;
 			}
-			const fiveHour = snapshot.fiveHourUsed === undefined ? "?" : `${Math.round(snapshot.fiveHourUsed)}% used`;
-			const weekly = snapshot.weeklyUsed === undefined ? "?" : `${Math.round(snapshot.weeklyUsed)}% used`;
-			const parts = [`5h ${fiveHour}`, `weekly ${weekly}`];
+			const parts: string[] = [];
+			if (snapshot.fiveHourUsed !== undefined) parts.push(`5h ${Math.round(snapshot.fiveHourUsed)}% used`);
+			if (snapshot.weeklyUsed !== undefined) parts.push(`weekly ${Math.round(snapshot.weeklyUsed)}% used`);
 			const fiveHourReset = formatReset(snapshot.fiveHourResetAt);
 			const weeklyReset = formatReset(snapshot.weeklyResetAt);
 			if (fiveHourReset) parts.push(`5h resets in ${fiveHourReset}`);

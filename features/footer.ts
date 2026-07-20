@@ -112,8 +112,12 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 					};
 					const codexStr = codexUsage
 						? [
-								`${theme.fg("dim", "5h ")}${colorizeCodexUsage(codexUsage.fiveHourUsed)}`,
-								`${theme.fg("dim", "wk ")}${colorizeCodexUsage(codexUsage.weeklyUsed)}`,
+								codexUsage.fiveHourUsed !== undefined
+									? `${theme.fg("dim", "5h ")}${colorizeCodexUsage(codexUsage.fiveHourUsed)}`
+									: "",
+								codexUsage.weeklyUsed !== undefined
+									? `${theme.fg("dim", "wk ")}${colorizeCodexUsage(codexUsage.weeklyUsed)}`
+									: "",
 								codexUsage.availableResets !== undefined
 									? `${theme.fg("dim", "↺")}${theme.fg("muted", String(codexUsage.availableResets))}`
 									: "",

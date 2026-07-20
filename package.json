@@ -5,6 +5,9 @@
   "type": "module",
   "description": "Personal pi quality-of-life extension.",
   "keywords": ["pi-package"],
+  "scripts": {
+    "test": "node --test features/*.test.ts"
+  },
   "pi": {
     "extensions": ["./index.ts"]
   },
