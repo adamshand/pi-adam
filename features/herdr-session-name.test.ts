@@ -49,12 +49,11 @@ function createHarness(sessionName?: string) {
 	return { calls, handlers };
 }
 
-test("a Pi /name renames the Herdr tab and becomes the primary agent title", async () => {
+test("a Pi /name renames the Herdr tab and becomes the secondary agent label", async () => {
 	const { calls, handlers } = createHarness();
 	await handlers.get("session_info_changed")?.({ name: "bugs" }, { cwd: "/src/haume-made.git" });
 
 	assert.deepEqual(calls, [
-		{ command: "herdr", args: ["workspace", "get", "w1"] },
 		{ command: "herdr", args: ["tab", "rename", "w1:t3", "bugs"] },
 		{
 			command: "herdr",
@@ -63,8 +62,8 @@ test("a Pi /name renames the Herdr tab and becomes the primary agent title", asy
 				"--source", "pi-adam.session-name",
 				"--agent", "pi",
 				"--applies-to-source", "herdr:pi",
-				"--title", "bugs",
-				"--display-agent", "haume-made.git",
+				"--clear-title",
+				"--display-agent", "bugs",
 			],
 		},
 	]);
@@ -96,7 +95,7 @@ test("a named session is synchronized when Pi starts or resumes it", async () =>
 	await handlers.get("session_start")?.({ reason: "startup" }, { cwd: "/src/haume-made.git" });
 
 	assert.equal(calls.some(({ args }) => args.join(" ") === "tab rename w1:t3 release"), true);
-	assert.equal(calls.some(({ args }) => args.includes("--title") && args.includes("release")), true);
+	assert.equal(calls.some(({ args }) => args.includes("--display-agent") && args.includes("release")), true);
 });
 
 test("an unnamed initial session leaves manual Herdr labels alone", async () => {

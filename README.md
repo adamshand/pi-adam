@@ -12,9 +12,27 @@ Personal pi quality-of-life extension.
 - Slash-command usage is stored in `state.json` next to this extension.
 - `/pi-adam-mru` shows the recent list.
 - `/pi-adam-mru reset` clears it.
-- Inside Herdr, Pi `/name` values automatically rename the tab and appear as the primary agents-panel title, with the workspace name beneath.
+- Inside Herdr, Pi `/name` values automatically rename the tab and appear beneath the workspace name in the agents panel.
 - Herdr todo board watches `.pi/todos` and shows session or project progress in a side pane.
 - New todos are scoped to the current Pi session automatically; add a `project` tag to keep a todo project-wide.
+
+## Herdr session names
+
+When Pi runs inside Herdr, `/name bugs` renames the current tab and reports `bugs` as the visible agent label. This package expects the following Herdr sidebar layout in `~/.config/herdr/config.toml`:
+
+```toml
+[ui.sidebar.agents]
+rows = [["state_icon", "workspace"], ["agent"]]
+```
+
+The resulting agent entry is:
+
+```text
+pi-adam.git
+bugs
+```
+
+Reload Herdr configuration with `herdr server reload-config` after changing it. Clearing the Pi session name restores the tab's numeric label and the normal `pi` agent label.
 
 ## Herdr todo board
 
@@ -95,7 +113,7 @@ Do not pass `--cwd`: Herdr normally runs the command from the plugin root, where
 - `features/env.ts` — dotenv loading and `/env`
 - `features/footer.ts` — custom session footer
 - `features/codex-usage.ts` — read-only Codex usage and banked-reset API integration
-- `features/herdr-session-name.ts` — Pi `/name` synchronization with Herdr tabs and agent metadata
+- `features/herdr-session-name.ts` — Pi `/name` synchronization with Herdr tabs and agent titles
 - `features/herdr-todos.ts` — todo/idea guidance and tools, board lifecycle, views, and visibility
 - `features/mru.ts` — slash-command recency and editor integration
 - `herdr-plugin/board.js` — interactive terminal board
