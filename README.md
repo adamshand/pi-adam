@@ -12,6 +12,7 @@ Personal pi quality-of-life extension.
 - Slash-command usage is stored in `state.json` next to this extension.
 - `/pi-adam-mru` shows the recent list.
 - `/pi-adam-mru reset` clears it.
+- Inside Herdr, Pi `/name` values automatically rename the tab and appear as the primary agents-panel title, with the workspace name beneath.
 - Herdr todo board watches `.pi/todos` and shows session or project progress in a side pane.
 - New todos are scoped to the current Pi session automatically; add a `project` tag to keep a todo project-wide.
 
@@ -94,6 +95,7 @@ Do not pass `--cwd`: Herdr normally runs the command from the plugin root, where
 - `features/env.ts` — dotenv loading and `/env`
 - `features/footer.ts` — custom session footer
 - `features/codex-usage.ts` — read-only Codex usage and banked-reset API integration
+- `features/herdr-session-name.ts` — Pi `/name` synchronization with Herdr tabs and agent metadata
 - `features/herdr-todos.ts` — todo/idea guidance and tools, board lifecycle, views, and visibility
 - `features/mru.ts` — slash-command recency and editor integration
 - `herdr-plugin/board.js` — interactive terminal board
