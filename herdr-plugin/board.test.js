@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -71,22 +71,78 @@ test("checklist progress is visible and details toggle with d or a title click",
 		board.stdin.write("\x1b[<0;8;3M");
 		await waitFor(() => latestScreen(output).includes("concise context"), "clicking the title did not expand todo details");
 	} finally {
-		board.kill("SIGTERM");
-		await new Promise((resolve) => board.once("exit", resolve));
+		if (board.exitCode === null) {
+			board.kill("SIGTERM");
+			await new Promise((resolve) => board.once("exit", resolve));
+		}
 		rmSync(cwd, { recursive: true, force: true });
 	}
 });
 
-test("Tab and the clickable scope label toggle between session and project todos", async () => {
-	const cwd = mkdtempSync(join(tmpdir(), "pi-adam-board-scope-"));
+test("ideas can be promoted to session todos or dismissed with confirmation", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-adam-board-idea-actions-"));
+	const ideaDirectory = join(cwd, ".pi", "ideas");
+	mkdirSync(ideaDirectory, { recursive: true });
+	const addIdea = (id, title) => {
+		writeFileSync(join(ideaDirectory, `${id}.md`), `${JSON.stringify({ id, title, created_at: id, updated_at: id }, null, 2)}\n\nContext for ${title}.\n`);
+	};
+	addIdea("a", "Promote me");
+	addIdea("b", "Dismiss me");
+
+	let output = "";
+	const board = spawn(process.execPath, [boardPath.pathname], {
+		env: {
+			...process.env,
+			PI_ADAM_TODO_CWD: cwd,
+			PI_ADAM_TODO_SESSION_ID: "session-one",
+			PI_ADAM_TODO_VIEW: "ideas",
+			PI_ADAM_TODO_INTERVAL_MS: "10000",
+		},
+		stdio: ["pipe", "pipe", "pipe"],
+	});
+	board.stdout.on("data", (chunk) => { output += chunk.toString("utf8"); });
+
+	try {
+		await waitFor(() => latestScreen(output).includes("Promote me"), "board did not render ideas");
+		board.stdin.write("p");
+		await waitFor(() => !latestScreen(output).includes("◇ Promote me") && latestScreen(output).includes("◇ Dismiss me"), "p did not promote the selected idea");
+		const todoNames = readdirSync(join(cwd, ".pi", "todos"));
+		assert.equal(todoNames.length, 1);
+		const promoted = JSON.parse(readFileSync(join(cwd, ".pi", "todos", todoNames[0]), "utf8").split(/\r?\n\r?\n/, 1)[0]);
+		assert.equal(promoted.title, "Promote me");
+		assert.deepEqual(promoted.tags, ["session:session-one"]);
+
+		board.stdin.write("x");
+		await waitFor(() => latestScreen(output).includes("Dismiss idea"), "x did not request dismissal confirmation");
+		board.stdin.write("n");
+		await waitFor(() => !latestScreen(output).includes("Dismiss idea"), "n did not cancel dismissal");
+		assert.ok(latestScreen(output).includes("Dismiss me"));
+		board.stdin.write("x");
+		await waitFor(() => latestScreen(output).includes("Dismiss idea"), "second dismissal was not requested");
+		board.stdin.write("y");
+		await waitFor(() => latestScreen(output).includes("No ideas"), "confirmed dismissal did not remove the idea");
+	} finally {
+		if (board.exitCode === null) {
+			board.kill("SIGTERM");
+			await new Promise((resolve) => board.once("exit", resolve));
+		}
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("Tab, i, and clickable labels navigate SESSION, ALL, and IDEAS views", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-adam-board-views-"));
 	const todoDirectory = join(cwd, ".pi", "todos");
-	const statePath = join(cwd, "scope", "session-one.scope");
+	const ideaDirectory = join(cwd, ".pi", "ideas");
+	const statePath = join(cwd, "state", "session-one.view");
 	mkdirSync(todoDirectory, { recursive: true });
+	mkdirSync(ideaDirectory, { recursive: true });
 	const add = (id, title, tags) => {
 		writeFileSync(join(todoDirectory, `${id}.md`), `${JSON.stringify({ id, title, status: "open", tags, created_at: id }, null, 2)}\n\n`);
 	};
 	add("session", "Session task", ["session:session-one"]);
-	add("project", "Project task", ["project"]);
+	add("other", "Other session task", ["session:session-two"]);
+	writeFileSync(join(ideaDirectory, "future.md"), `${JSON.stringify({ id: "future", title: "Future possibility", created_at: "future", updated_at: "future" }, null, 2)}\n\nWorth considering later.\n`);
 
 	let output = "";
 	const board = spawn(process.execPath, [boardPath.pathname], {
@@ -103,19 +159,29 @@ test("Tab and the clickable scope label toggle between session and project todos
 	board.stdout.on("data", (chunk) => { output += chunk.toString("utf8"); });
 
 	try {
-		await waitFor(() => latestScreen(output).includes("SESSION") && latestScreen(output).includes("Session task"), "board did not render session scope");
-		assert.ok(!latestScreen(output).includes("Project task"));
+		await waitFor(() => latestScreen(output).includes("SESSION") && latestScreen(output).includes("Session task"), "board did not render SESSION view");
+		assert.ok(!latestScreen(output).includes("Other session task"));
+		assert.ok(!latestScreen(output).includes("Future possibility"));
 
 		board.stdin.write("\t");
-		await waitFor(() => latestScreen(output).includes("PROJECT") && latestScreen(output).includes("Project task"), "Tab did not render project scope");
-		assert.equal(readFileSync(statePath, "utf8"), "project\n");
+		await waitFor(() => latestScreen(output).includes("Other session task"), "Tab did not render ALL view");
+		assert.match(readFileSync(statePath, "utf8"), /"view":\s*"all"/);
+
+		board.stdin.write("\t");
+		await waitFor(() => latestScreen(output).includes("Future possibility") && !latestScreen(output).includes("Session task"), "Tab did not render IDEAS view");
+		assert.match(readFileSync(statePath, "utf8"), /"view":\s*"ideas"/);
 
 		board.stdin.write("\x1b[<0;4;1M");
-		await waitFor(() => latestScreen(output).includes("SESSION") && !latestScreen(output).includes("Project task"), "clicking the scope label did not restore session scope");
-		assert.equal(readFileSync(statePath, "utf8"), "session\n");
+		await waitFor(() => latestScreen(output).includes("Session task") && !latestScreen(output).includes("Future possibility"), "clicking SESSION did not select its view");
+		board.stdin.write("i");
+		await waitFor(() => latestScreen(output).includes("Future possibility"), "i did not open IDEAS");
+		board.stdin.write("i");
+		await waitFor(() => latestScreen(output).includes("Session task"), "i did not restore the previous todo view");
 	} finally {
-		board.kill("SIGTERM");
-		await new Promise((resolve) => board.once("exit", resolve));
+		if (board.exitCode === null) {
+			board.kill("SIGTERM");
+			await new Promise((resolve) => board.once("exit", resolve));
+		}
 		rmSync(cwd, { recursive: true, force: true });
 	}
 });

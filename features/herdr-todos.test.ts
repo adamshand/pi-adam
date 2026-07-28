@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { registerHerdrTodosFeature } from "./herdr-todos.ts";
+import { listIdeas } from "../herdr-plugin/idea-store.js";
 import { listTodos, sessionTag, todoState } from "../herdr-plugin/todo-store.js";
 
 test("agent receives outcome-oriented todo guidance before starting", async () => {
@@ -18,6 +19,93 @@ test("agent receives outcome-oriented todo guidance before starting", async () =
 	assert.match(result?.systemPrompt ?? "", /3–7 outcome-level todos/);
 	assert.match(result?.systemPrompt ?? "", /Before settling, reconcile/);
 	assert.match(result?.systemPrompt ?? "", /acceptance criteria/);
+});
+
+test("user can capture a non-actionable project idea with /idea", async () => {
+	const previousHerdrEnv = process.env.HERDR_ENV;
+	delete process.env.HERDR_ENV;
+	const cwd = mkdtempSync(join(tmpdir(), "pi-adam-add-idea-"));
+	const handlers = new Map<string, (...args: any[]) => any>();
+	const commands = new Map<string, { handler: (...args: any[]) => any }>();
+	const pi = {
+		on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
+		registerCommand(name: string, command: { handler: (...args: any[]) => any }) { commands.set(name, command); },
+		registerTool() {},
+		async exec() { return { code: 1, stdout: "", stderr: "mock Herdr" }; },
+	};
+	const ctx = {
+		cwd,
+		sessionManager: { getSessionId: () => "session-one" },
+		ui: { notify() {}, async confirm() { return true; }, async input() { return undefined; } },
+	};
+
+	try {
+		registerHerdrTodosFeature(pi as never);
+		await handlers.get("session_start")?.({}, ctx);
+		await commands.get("idea")?.handler("Explore durable memory", ctx);
+
+		const ideas = listIdeas(cwd);
+		assert.equal(ideas.length, 1);
+		assert.equal(ideas[0].title, "Explore durable memory");
+		assert.equal(listTodos(cwd, { scope: "project" }).length, 0);
+	} finally {
+		await handlers.get("session_shutdown")?.({}, ctx);
+		rmSync(cwd, { recursive: true, force: true });
+		if (previousHerdrEnv === undefined) delete process.env.HERDR_ENV;
+		else process.env.HERDR_ENV = previousHerdrEnv;
+	}
+});
+
+test("agent can capture project context with the idea tool", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-adam-agent-idea-"));
+	let ideaTool: any;
+	const pi = {
+		on() {},
+		registerCommand() {},
+		registerTool(tool: any) { if (tool.name === "idea") ideaTool = tool; },
+	};
+	const ctx = { cwd, sessionManager: { getSessionId: () => "session-one" } };
+
+	try {
+		registerHerdrTodosFeature(pi as never);
+		assert.ok(ideaTool);
+		const result = await ideaTool.execute("call", {
+			action: "create",
+			title: "Explore a later project",
+			body: "Context that should survive this conversation.",
+		}, undefined, undefined, ctx);
+
+		assert.match(result.content[0].text, /Captured idea/);
+		const ideas = listIdeas(cwd);
+		assert.equal(ideas.length, 1);
+		assert.equal(ideas[0].title, "Explore a later project");
+		assert.equal(ideas[0].body, "Context that should survive this conversation.");
+
+		await ideaTool.execute("call", {
+			action: "update",
+			id: result.details.id,
+			title: "Explore durable project memory",
+			body: "Sharpened context.",
+		}, undefined, undefined, ctx);
+		const listed = await ideaTool.execute("call", { action: "list" }, undefined, undefined, ctx);
+		assert.match(listed.content[0].text, /Explore durable project memory/);
+		assert.equal(listIdeas(cwd)[0].body, "Sharpened context.");
+
+		await ideaTool.execute("call", { action: "delete", id: result.details.id }, undefined, undefined, ctx);
+		assert.equal(listIdeas(cwd).length, 0);
+
+		const future = await ideaTool.execute("call", {
+			action: "create",
+			title: "Promote this later",
+		}, undefined, undefined, ctx);
+		await ideaTool.execute("call", { action: "promote", id: future.details.id }, undefined, undefined, ctx);
+		assert.equal(listIdeas(cwd).length, 0);
+		const promoted = listTodos(cwd, { scope: "session", sessionId: "session-one" });
+		assert.equal(promoted.length, 1);
+		assert.equal(promoted[0].title, "Promote this later");
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
 });
 
 test("user can add a todo to the current session with /todo", async () => {
@@ -169,18 +257,22 @@ test("adding a todo opens its board and board scope changes reach the controller
 	try {
 		registerHerdrTodosFeature(pi as never);
 		await handlers.get("session_start")?.({}, ctx);
-		await commands.get("todo")?.handler("Open the board", ctx);
+		await commands.get("herdr-todos")?.handler("view ideas", ctx);
+		await commands.get("idea")?.handler("Do not auto-open", ctx);
+		assert.ok(!executions.some((args) => args[0] === "plugin" && args[1] === "pane" && args[2] === "open"));
 
+		await commands.get("todo")?.handler("Open the board", ctx);
 		const openArgs = executions.find((args) => args[0] === "plugin" && args[1] === "pane" && args[2] === "open");
 		assert.ok(openArgs);
+		assert.ok(openArgs.includes("PI_ADAM_TODO_VIEW=session"));
 		const stateSetting = openArgs.find((arg) => arg.startsWith("PI_ADAM_TODO_STATE_PATH="));
 		assert.ok(stateSetting);
 		const statePath = stateSetting.slice("PI_ADAM_TODO_STATE_PATH=".length);
 		mkdirSync(dirname(statePath), { recursive: true });
-		writeFileSync(statePath, "project\n");
+		writeFileSync(statePath, `${JSON.stringify({ view: "all", lastTodoView: "all" }, null, 2)}\n`);
 		await commands.get("herdr-todos")?.handler("refresh", ctx);
 		await commands.get("herdr-todos")?.handler("status", ctx);
-		assert.ok(notifications.some((message) => message.includes("project todos")));
+		assert.ok(notifications.some((message) => message.includes("all todos")));
 	} finally {
 		await handlers.get("session_shutdown")?.({}, ctx);
 		rmSync(cwd, { recursive: true, force: true });

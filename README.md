@@ -25,22 +25,29 @@ Link the local Herdr plugin once during development:
 herdr plugin link "$PWD/herdr-plugin"
 ```
 
-By default, the board uses **session scope** and opens automatically while that session has unfinished todos. Session ownership is stored as a hidden `session:<pi-session-id>` tag, so separate Pi sessions in the same checkout get separate boards and task lists. Switch to all todos in the checkout with project scope:
+By default, the board opens automatically while its actionable view has unfinished todos. Session ownership is stored as a hidden `session:<pi-session-id>` tag, so separate Pi sessions in the same checkout get separate boards and task lists. The board has three views:
+
+- **SESSION** — actionable todos owned by the current Pi session.
+- **ALL** — every actionable todo in the checkout.
+- **IDEAS** — project-wide future possibilities that are not current commitments.
 
 ```text
-/herdr-todos scope session
-/herdr-todos scope project
+/herdr-todos view session
+/herdr-todos view all
+/herdr-todos view ideas
 ```
 
-Add a todo manually from Pi. Omitting the title opens an input prompt:
+Capture actionable todos or non-actionable ideas manually from Pi. Omitting a title opens an input prompt:
 
 ```text
 /todo Buy milk
 /todo --project Fix release workflow
-/todo
+/idea Explore a future project
 ```
 
-The extension also guides agents to maintain a small set of outcome-level commitments instead of one opaque umbrella ticket or many mechanical micro-tasks. Todo bodies should hold concise context, acceptance criteria, and tightly related checklist steps; agents are reminded to reconcile commitments before settling.
+Ideas are stored independently under `.pi/ideas/<id>.md`; they do not count as unfinished and do not automatically open the pane. The agent-facing `idea` tool can create, list, update, delete, and promote ideas.
+
+The extension guides agents to maintain a small set of outcome-level commitments instead of one opaque umbrella ticket or many mechanical micro-tasks. It explicitly distinguishes actionable todos from future ideas and reminds agents to reconcile both before settling.
 
 Visibility and maintenance commands:
 
@@ -60,7 +67,9 @@ In the board, click a status icon or select a row with `↑`/`↓` or `j`/`k` an
 
 Markdown checklist progress appears beside each title, such as `2/4`. Press `d` or click a todo's title to expand or collapse its context and checklist; click its status icon to cycle status.
 
-Press `Tab` or click the `SESSION`/`PROJECT` label to switch scope. The controller follows the board's scope, so automatic visibility and clearing stay consistent. Press `c` to clear completed todos in the current scope (with confirmation), or `q` to close the pane. IDs, session tags, and category tags are intentionally hidden. The board polls `.pi/todos` every 700ms, so tool and board changes stay synchronized.
+Press `Tab` to cycle `SESSION → ALL → IDEAS`, click a header label directly, or press `i` to toggle Ideas and the previous todo view. In Ideas, press `p` to promote the selected item into a current-session todo or `x` to dismiss it with confirmation. Automatic opening restores the last actionable view rather than opening into Ideas.
+
+Press `c` to clear completed todos in SESSION or ALL (with confirmation), or `q` to close the pane. IDs, session tags, and category tags are intentionally hidden. The board polls `.pi/todos` every 700ms, so tool and board changes stay synchronized.
 
 To open the plugin pane manually from a Pi pane:
 
@@ -72,7 +81,7 @@ herdr plugin pane open \
   --direction right \
   --env "PI_ADAM_TODO_CWD=$PWD" \
   --env "PI_ADAM_TODO_SESSION_ID=$PI_SESSION_ID" \
-  --env "PI_ADAM_TODO_SCOPE=session" \
+  --env "PI_ADAM_TODO_VIEW=session" \
   --no-focus
 ```
 
@@ -85,10 +94,12 @@ Do not pass `--cwd`: Herdr normally runs the command from the plugin root, where
 - `features/env.ts` — dotenv loading and `/env`
 - `features/footer.ts` — custom session footer
 - `features/codex-usage.ts` — read-only Codex usage and banked-reset API integration
-- `features/herdr-todos.ts` — todo guidance, `/todo`, session tagging, board lifecycle, scope, and visibility
+- `features/herdr-todos.ts` — todo/idea guidance and tools, board lifecycle, views, and visibility
 - `features/mru.ts` — slash-command recency and editor integration
 - `herdr-plugin/board.js` — interactive terminal board
-- `herdr-plugin/todo-store.js` — shared parsing, filtering, transitions, and clearing
+- `herdr-plugin/todo-store.js` — actionable todo persistence and transitions
+- `herdr-plugin/idea-store.js` — non-actionable idea persistence and promotion
+- `herdr-plugin/view-state.js` — session-local board view state
 - `herdr-plugin/herdr-plugin.toml` — Herdr plugin manifest
 
 Reload pi with `/reload` after changes.
