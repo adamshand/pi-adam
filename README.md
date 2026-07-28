@@ -25,7 +25,7 @@ Link the local Herdr plugin once during development:
 herdr plugin link "$PWD/herdr-plugin"
 ```
 
-By default, the board opens automatically while its actionable view has unfinished todos. Session ownership is stored as a hidden `session:<pi-session-id>` tag, so separate Pi sessions in the same checkout get separate boards and task lists. The board has three views:
+By default, the board opens automatically at roughly one-third of the tab width while its actionable view has unfinished todos. Session ownership is stored as a hidden `session:<pi-session-id>` tag, so separate Pi sessions in the same checkout get separate boards and task lists. The board has three views:
 
 - **SESSION** — actionable todos owned by the current Pi session.
 - **ALL** — every actionable todo in the checkout.
@@ -49,7 +49,7 @@ Ideas are stored independently under `.pi/ideas/<id>.md`; they do not count as u
 
 The extension guides agents to maintain a small set of outcome-level commitments instead of one opaque umbrella ticket or many mechanical micro-tasks. It explicitly distinguishes actionable todos from future ideas and reminds agents to reconcile both before settling.
 
-Visibility and maintenance commands:
+Press `Alt+T` while the Pi pane is focused to toggle the Herdr board. The equivalent visibility and maintenance commands are:
 
 ```text
 /herdr-todos toggle   # manually show or hide for this running session

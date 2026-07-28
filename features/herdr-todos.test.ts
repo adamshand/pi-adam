@@ -236,9 +236,11 @@ test("adding a todo opens its board and board scope changes reach the controller
 	const commands = new Map<string, { handler: (...args: any[]) => any }>();
 	const executions: string[][] = [];
 	const notifications: string[] = [];
+	let todoShortcut: { handler: (ctx: any) => Promise<void> } | undefined;
 	const pi = {
 		on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
 		registerCommand(name: string, command: { handler: (...args: any[]) => any }) { commands.set(name, command); },
+		registerShortcut(key: string, shortcut: { handler: (ctx: any) => Promise<void> }) { if (key === "alt+t") todoShortcut = shortcut; },
 		async exec(_command: string, args: string[]) {
 			executions.push(args);
 			if (args[0] === "pane" && args[1] === "list") return { code: 0, stdout: '{"result":{"panes":[]}}', stderr: "" };
@@ -265,6 +267,15 @@ test("adding a todo opens its board and board scope changes reach the controller
 		const openArgs = executions.find((args) => args[0] === "plugin" && args[1] === "pane" && args[2] === "open");
 		assert.ok(openArgs);
 		assert.ok(openArgs.includes("PI_ADAM_TODO_VIEW=session"));
+		assert.ok(todoShortcut);
+		await todoShortcut.handler(ctx);
+		assert.ok(executions.some((args) => args[0] === "plugin" && args[1] === "pane" && args[2] === "close"));
+		await todoShortcut.handler(ctx);
+		assert.equal(executions.filter((args) => args[0] === "plugin" && args[1] === "pane" && args[2] === "open").length, 2);
+		assert.ok(executions.some((args) =>
+			args[0] === "pane" && args[1] === "resize" &&
+			args.includes("workspace:board") && args.includes("right") && args.includes("0.17")
+		));
 		const stateSetting = openArgs.find((arg) => arg.startsWith("PI_ADAM_TODO_STATE_PATH="));
 		assert.ok(stateSetting);
 		const statePath = stateSetting.slice("PI_ADAM_TODO_STATE_PATH=".length);

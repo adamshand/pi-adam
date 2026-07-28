@@ -47,6 +47,7 @@ const PLUGIN_ID = "pi-adam.todos";
 const PANE_ENTRYPOINT = "board";
 const REFRESH_MS = 1500;
 const CLOSE_DELAY_MS = 1500;
+const INITIAL_BOARD_RESIZE = "0.17"; // Default 50/50 split becomes approximately 67/33.
 
 function isHerdrPane(): boolean {
 	return process.env.HERDR_ENV === "1";
@@ -216,7 +217,10 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 			const paneId = parseJson<PluginPaneOpenResponse>(result.stdout)?.result?.plugin_pane?.pane?.pane_id;
 			open = result.ok && paneId !== undefined;
 			boardPaneId = open ? paneId : undefined;
-			if (boardPaneId) await runHerdr(["pane", "rename", boardPaneId, boardLabel(currentSessionId)]);
+			if (boardPaneId) {
+				await runHerdr(["pane", "resize", "--pane", boardPaneId, "--direction", "right", "--amount", INITIAL_BOARD_RESIZE]);
+				await runHerdr(["pane", "rename", boardPaneId, boardLabel(currentSessionId)]);
+			}
 			return open;
 		} finally {
 			opening = false;
@@ -318,6 +322,23 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 		if (open) await closeBoard();
 	});
 
+	const toggleBoard = async (ctx: ExtensionContext): Promise<void> => {
+		await refreshOpenState();
+		if (open) {
+			visibility = "hidden";
+			await closeBoard();
+		} else {
+			visibility = "shown";
+			await reconcile(ctx, { force: true });
+		}
+		ctx.ui.notify(`pi-adam: todo board ${open ? "shown" : "hidden"}`, "info");
+	};
+
+	pi.registerShortcut?.("alt+t", {
+		description: "Toggle the Herdr todo pane",
+		handler: toggleBoard,
+	});
+
 	pi.registerCommand("idea", {
 		description: "Capture a non-actionable project idea",
 		handler: async (args, ctx) => {
@@ -369,14 +390,7 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 			const [action = "status", value] = args.trim().split(/\s+/, 2);
 
 			if (action === "toggle") {
-				if (visibility === "hidden") {
-					visibility = "shown";
-					await reconcile(ctx, { force: true });
-				} else {
-					visibility = "hidden";
-					await closeBoard();
-				}
-				ctx.ui.notify(`pi-adam: todo board ${visibility === "hidden" ? "hidden" : "shown"}`, "info");
+				await toggleBoard(ctx);
 				return;
 			}
 			if (action === "auto") {
