@@ -32,6 +32,14 @@ By default, the board uses **session scope** and opens automatically while that 
 /herdr-todos scope project
 ```
 
+Add a todo manually from Pi. Omitting the title opens an input prompt:
+
+```text
+/todo Buy milk
+/todo --project Fix release workflow
+/todo
+```
+
 Visibility and maintenance commands:
 
 ```text

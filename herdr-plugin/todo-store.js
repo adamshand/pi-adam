@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
 export const SESSION_TAG_PREFIX = "session:";
@@ -57,6 +58,26 @@ export function writeTodo(todo) {
 		try { unlinkSync(temporary); } catch {}
 		throw error;
 	}
+}
+
+export function createTodo(cwd, options) {
+	const directory = todosDirectory(cwd);
+	mkdirSync(directory, { recursive: true });
+	let id;
+	let path;
+	do {
+		id = randomBytes(4).toString("hex");
+		path = join(directory, `${id}.md`);
+	} while (existsSync(path));
+	const metadata = {
+		id,
+		title: options.title,
+		tags: options.tags ?? [],
+		status: "open",
+		created_at: new Date().toISOString(),
+	};
+	writeTodo({ path, metadata, body: options.body ?? "" });
+	return readTodo(path);
 }
 
 export function listTodos(cwd, options = {}) {

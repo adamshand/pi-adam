@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { clearCompleted, isCompleted, listTodos, SESSION_TAG_PREFIX, sessionTag } from "../herdr-plugin/todo-store.js";
+import { clearCompleted, createTodo, isCompleted, listTodos, SESSION_TAG_PREFIX, sessionTag } from "../herdr-plugin/todo-store.js";
 
 type Scope = "session" | "project";
 type Visibility = "auto" | "shown" | "hidden";
@@ -245,6 +245,27 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 		interval = undefined;
 		closeTimer = undefined;
 		if (open) await closeBoard();
+	});
+
+	pi.registerCommand("todo", {
+		description: "Add a session todo; use --project for project scope",
+		getArgumentCompletions(prefix) {
+			return "--project".startsWith(prefix.trim()) ? [{ value: "--project ", label: "--project", description: "Add a project-wide todo" }] : [];
+		},
+		handler: async (args, ctx) => {
+			const input = args.trim();
+			const projectWide = input === "--project" || input.startsWith("--project ");
+			let title = projectWide ? input.slice("--project".length).trim() : input;
+			if (!title) {
+				const entered = await ctx.ui.input(projectWide ? "Add project todo" : "Add session todo", "Todo title");
+				if (entered === undefined) return;
+				title = entered.trim();
+				if (!title) return;
+			}
+			createTodo(ctx.cwd, { title, tags: projectWide ? ["project"] : [sessionTag(currentSessionId)] });
+			await reconcile(ctx, { force: true });
+			ctx.ui.notify(`Added todo: ${title}`, "info");
+		},
 	});
 
 	pi.registerCommand("herdr-todos", {
