@@ -47,6 +47,8 @@ test("user can capture a non-actionable project idea with /idea", async () => {
 		const ideas = listIdeas(cwd);
 		assert.equal(ideas.length, 1);
 		assert.equal(ideas[0].title, "Explore durable memory");
+		assert.equal(ideas[0].originSessionId, "session-one");
+		assert.equal(ideas[0].origin, "user");
 		assert.equal(listTodos(cwd, { scope: "project" }).length, 0);
 	} finally {
 		await handlers.get("session_shutdown")?.({}, ctx);
@@ -80,6 +82,8 @@ test("agent can capture project context with the idea tool", async () => {
 		assert.equal(ideas.length, 1);
 		assert.equal(ideas[0].title, "Explore a later project");
 		assert.equal(ideas[0].body, "Context that should survive this conversation.");
+		assert.equal(ideas[0].originSessionId, "session-one");
+		assert.equal(ideas[0].origin, "agent");
 
 		await ideaTool.execute("call", {
 			action: "update",

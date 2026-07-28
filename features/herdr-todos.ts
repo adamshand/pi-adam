@@ -105,7 +105,12 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 			if (params.action === "create") {
 				const title = params.title?.trim();
 				if (!title) return { content: [{ type: "text" as const, text: "Error: idea title is required" }], details: { error: "title required" } };
-				const idea = createIdea(ctx.cwd, { title, body: params.body?.trim() ?? "" });
+				const idea = createIdea(ctx.cwd, {
+					title,
+					body: params.body?.trim() ?? "",
+					originSessionId: ctx.sessionManager.getSessionId(),
+					origin: "agent",
+				});
 				return {
 					content: [{ type: "text" as const, text: `Captured idea: ${idea.title}` }],
 					details: { action: "create", id: idea.id, title: idea.title },
@@ -349,7 +354,7 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 				title = entered.trim();
 				if (!title) return;
 			}
-			createIdea(ctx.cwd, { title });
+			createIdea(ctx.cwd, { title, originSessionId: currentSessionId, origin: "user" });
 			ctx.ui.notify(`Captured idea: ${title}`, "info");
 		},
 	});

@@ -45,7 +45,7 @@ Capture actionable todos or non-actionable ideas manually from Pi. Omitting a ti
 /idea Explore a future project
 ```
 
-Ideas are stored independently under `.pi/ideas/<id>.md`; they do not count as unfinished and do not automatically open the pane. The agent-facing `idea` tool can create, list, update, delete, and promote ideas.
+Ideas are stored independently under `.pi/ideas/<id>.md` with creation/update timestamps, the originating Pi session ID, and whether they were captured by the user or agent. They do not count as unfinished and do not automatically open the pane. The agent-facing `idea` tool can create, list, update, delete, and promote ideas.
 
 The extension guides agents to maintain a small set of outcome-level commitments instead of one opaque umbrella ticket or many mechanical micro-tasks. It explicitly distinguishes actionable todos from future ideas and reminds agents to reconcile both before settling.
 

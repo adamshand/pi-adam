@@ -20,6 +20,8 @@ export function readIdea(path) {
 			title: String(metadata.title ?? "Untitled"),
 			createdAt: String(metadata.created_at ?? ""),
 			updatedAt: String(metadata.updated_at ?? metadata.created_at ?? ""),
+			originSessionId: typeof metadata.origin_session_id === "string" ? metadata.origin_session_id : undefined,
+			origin: typeof metadata.origin === "string" ? metadata.origin : undefined,
 			metadata,
 			body,
 		};
@@ -50,7 +52,14 @@ export function createIdea(cwd, options) {
 		path = join(directory, `${id}.md`);
 	} while (existsSync(path));
 	const createdAt = new Date().toISOString();
-	const metadata = { id, title: options.title, created_at: createdAt, updated_at: createdAt };
+	const metadata = {
+		id,
+		title: options.title,
+		...(options.originSessionId ? { origin_session_id: options.originSessionId } : {}),
+		...(options.origin ? { origin: options.origin } : {}),
+		created_at: createdAt,
+		updated_at: createdAt,
+	};
 	writeIdea({ path, metadata, body: options.body ?? "" });
 	return readIdea(path);
 }
