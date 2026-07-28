@@ -6,6 +6,20 @@ import test from "node:test";
 import { registerHerdrTodosFeature } from "./herdr-todos.ts";
 import { listTodos, sessionTag, todoState } from "../herdr-plugin/todo-store.js";
 
+test("agent receives outcome-oriented todo guidance before starting", async () => {
+	const handlers = new Map<string, (...args: any[]) => any>();
+	const pi = {
+		on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
+		registerCommand() {},
+	};
+	registerHerdrTodosFeature(pi as never);
+
+	const result = await handlers.get("before_agent_start")?.({ systemPrompt: "Base prompt" }, {});
+	assert.match(result?.systemPrompt ?? "", /3–7 outcome-level todos/);
+	assert.match(result?.systemPrompt ?? "", /Before settling, reconcile/);
+	assert.match(result?.systemPrompt ?? "", /acceptance criteria/);
+});
+
 test("user can add a todo to the current session with /todo", async () => {
 	const previousHerdrEnv = process.env.HERDR_ENV;
 	delete process.env.HERDR_ENV;

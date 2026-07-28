@@ -76,6 +76,10 @@ function todoSnapshot(cwd: string, scope: Scope, sessionId: string): TodoSnapsho
 }
 
 export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
+	pi.on("before_agent_start", (event) => ({
+		systemPrompt: `${event.systemPrompt}\n\nTodo discipline:\n- Treat todos as a durable ledger of commitments, not a transcript of every mechanical step.\n- For non-trivial committed work, normally maintain 3–7 outcome-level todos rather than one umbrella ticket or many tiny implementation tickets.\n- Give each todo an independently understandable title. Keep its body concise: why it matters, key constraints, acceptance criteria, and only tightly related checklist steps.\n- Add, update, split, or close todos as commitments change during the conversation.\n- Before settling, reconcile the todo list against the conversation so no promised outcome is forgotten and statuses remain accurate.`,
+	}));
+
 	let interval: ReturnType<typeof setInterval> | undefined;
 	let closeTimer: ReturnType<typeof setTimeout> | undefined;
 	let opening = false;

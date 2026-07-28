@@ -23,6 +23,7 @@ const ansi = {
 
 let running = true;
 let selectedId;
+let expandedId;
 let confirmingClear = false;
 let flash = "";
 let flashUntil = 0;
@@ -58,6 +59,57 @@ function bar(done, total, width) {
 	return `${ansi.green}${"█".repeat(filled)}${ansi.gray}${"░".repeat(Math.max(0, width - filled))}${ansi.reset}`;
 }
 
+function checklistProgress(todo) {
+	const items = [...String(todo.body ?? "").matchAll(/^\s*[-*]\s+\[([ xX])\]\s+.+$/gm)];
+	return { done: items.filter((match) => match[1].toLowerCase() === "x").length, total: items.length };
+}
+
+function wrapLine(text, width, continuationPrefix = "") {
+	if (!text) return [""];
+	const words = text.split(/\s+/);
+	const lines = [];
+	let line = "";
+	for (const word of words) {
+		if (!line) {
+			line = word;
+		} else if (line.length + 1 + word.length <= width) {
+			line += ` ${word}`;
+		} else {
+			lines.push(line);
+			line = `${continuationPrefix}${word}`;
+		}
+	}
+	if (line) lines.push(line);
+	return lines;
+}
+
+function todoDetailLines(todo, width) {
+	const body = String(todo.body ?? "").trim();
+	if (!body) return [`   ${ansi.dim}No details.${ansi.reset}`];
+	const contentWidth = Math.max(8, width - 4);
+	const rendered = [];
+	for (const rawLine of body.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line) {
+			if (rendered.length > 0 && rendered.at(-1) !== "") rendered.push("");
+			continue;
+		}
+		const checkbox = line.match(/^[-*]\s+\[([ xX])\]\s+(.+)$/);
+		if (checkbox) {
+			const checked = checkbox[1].toLowerCase() === "x";
+			const icon = checked ? `${ansi.green}✓${ansi.reset}` : `${ansi.blue}○${ansi.reset}`;
+			const wrapped = wrapLine(checkbox[2], Math.max(4, contentWidth - 2), "  ");
+			rendered.push(`   ${icon} ${wrapped[0]}`);
+			for (const continuation of wrapped.slice(1)) rendered.push(`     ${continuation}`);
+			continue;
+		}
+		const plain = line.replace(/^#{1,6}\s+/, "").replace(/^[-*]\s+/, "• ");
+		for (const wrapped of wrapLine(plain, contentWidth)) rendered.push(`   ${ansi.dim}${wrapped}${ansi.reset}`);
+	}
+	while (rendered.at(-1) === "") rendered.pop();
+	return rendered.length > 0 ? rendered : [`   ${ansi.dim}No details.${ansi.reset}`];
+}
+
 function setFlash(message, durationMs = 2500) {
 	flash = message;
 	flashUntil = Date.now() + durationMs;
@@ -66,6 +118,7 @@ function setFlash(message, durationMs = 2500) {
 function ensureSelection(todos) {
 	if (todos.length === 0) {
 		selectedId = undefined;
+		expandedId = undefined;
 		return -1;
 	}
 	let index = todos.findIndex((todo) => todo.id === selectedId);
@@ -73,6 +126,7 @@ function ensureSelection(todos) {
 		index = 0;
 		selectedId = todos[0].id;
 	}
+	if (expandedId && !todos.some((todo) => todo.id === expandedId)) expandedId = undefined;
 	return index;
 }
 
@@ -87,8 +141,14 @@ function render() {
 	const pct = total === 0 ? 0 : Math.round((done / total) * 100);
 	const selectedIndex = ensureSelection(todos);
 	const available = Math.max(1, height - 5);
-	const start = selectedIndex < 0 ? 0 : Math.max(0, Math.min(selectedIndex - Math.floor(available / 2), total - available));
-	const shown = todos.slice(start, start + available);
+	const expandedTodo = todos.find((todo) => todo.id === expandedId);
+	const allDetailLines = expandedTodo ? todoDetailLines(expandedTodo, width) : [];
+	const detailBudget = expandedTodo ? Math.min(allDetailLines.length, Math.max(1, available - 1)) : 0;
+	const detailLines = allDetailLines.slice(0, detailBudget);
+	if (allDetailLines.length > detailBudget && detailLines.length > 0) detailLines[detailLines.length - 1] = `   ${ansi.dim}…${ansi.reset}`;
+	const taskCapacity = Math.max(1, available - detailLines.length);
+	const start = selectedIndex < 0 ? 0 : Math.max(0, Math.min(selectedIndex - Math.floor(taskCapacity / 2), total - taskCapacity));
+	const shown = todos.slice(start, start + taskCapacity);
 	const scopeLabel = scope === "project" ? "PROJECT" : "SESSION";
 
 	const lines = [];
@@ -104,16 +164,19 @@ function render() {
 			const terminalRow = lines.length + 1;
 			visibleRows.set(terminalRow, todo.id);
 			const prefix = ` ${statusIcon(todo)} `;
-			const titleWidth = Math.max(6, width - visibleLength(prefix) - 1);
-			const title = fit(todo.title, titleWidth);
+			const progress = checklistProgress(todo);
+			const progressLabel = progress.total > 0 ? ` ${progress.done}/${progress.total}` : "";
+			const titleWidth = Math.max(6, width - visibleLength(prefix) - progressLabel.length - 1);
+			const title = `${fit(todo.title, titleWidth)}${progressLabel ? `${ansi.dim}${progressLabel}${ansi.reset}` : ""}`;
 			const renderedTitle = todo.id === selectedId ? `${ansi.reverse}${title}${ansi.reset}` : title;
 			lines.push(`${prefix}${renderedTitle}`);
+			if (todo.id === expandedId) lines.push(...detailLines);
 		}
 	}
 
 	while (lines.length < height - 2) lines.push("");
 	const position = selectedIndex >= 0 ? `${selectedIndex + 1}/${total}` : "0/0";
-	lines.push(`${ansi.dim} ↑↓/jk select · space cycle · tab/click scope · c clear · q close · ${position}${ansi.reset}`);
+	lines.push(`${ansi.dim}${fit(` ↑↓/jk select · space cycle · d details · tab/click scope · c clear · q close · ${position}`, width)}${ansi.reset}`);
 	if (confirmingClear) {
 		const count = todos.filter(isCompleted).length;
 		lines.push(`${ansi.yellow} Delete ${count} completed ${scope} todo${count === 1 ? "" : "s"}? y/N${ansi.reset}`);
@@ -130,12 +193,22 @@ function moveSelection(delta) {
 	if (todos.length === 0) return;
 	const index = Math.max(0, todos.findIndex((todo) => todo.id === selectedId));
 	selectedId = todos[(index + delta + todos.length) % todos.length].id;
+	expandedId = undefined;
+	render();
+}
+
+function toggleDetails(id = selectedId) {
+	if (!id) return;
+	selectedId = id;
+	expandedId = expandedId === id ? undefined : id;
+	confirmingClear = false;
 	render();
 }
 
 function cycleSelected(id = selectedId) {
 	const todo = loadTodos().find((candidate) => candidate.id === id);
 	if (!todo) return;
+	if (expandedId && expandedId !== id) expandedId = undefined;
 	try {
 		const updated = cycleTodo(todo, sessionId);
 		selectedId = updated?.id ?? todo.id;
@@ -188,10 +261,10 @@ function handleMouse(input) {
 			toggleScope();
 			continue;
 		}
-		if (column <= 4) {
-			const id = visibleRows.get(row);
-			if (id) cycleSelected(id);
-		}
+		const id = visibleRows.get(row);
+		if (!id) continue;
+		if (column <= 3) cycleSelected(id);
+		else toggleDetails(id);
 	}
 	return input.replace(mouse, "");
 }
@@ -223,6 +296,7 @@ process.stdin.on("data", (chunk) => {
 	else if (input.includes("\x1b[A") || input === "k") moveSelection(-1);
 	else if (input.includes("\x1b[B") || input === "j") moveSelection(1);
 	else if (input === " " || input === "\r") cycleSelected();
+	else if (input.toLowerCase() === "d") toggleDetails();
 	else if (input.toLowerCase() === "c") requestClear();
 });
 

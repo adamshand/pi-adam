@@ -40,6 +40,8 @@ Add a todo manually from Pi. Omitting the title opens an input prompt:
 /todo
 ```
 
+The extension also guides agents to maintain a small set of outcome-level commitments instead of one opaque umbrella ticket or many mechanical micro-tasks. Todo bodies should hold concise context, acceptance criteria, and tightly related checklist steps; agents are reminded to reconcile commitments before settling.
+
 Visibility and maintenance commands:
 
 ```text
@@ -55,6 +57,8 @@ In the board, click a status icon or select a row with `↑`/`↓` or `j`/`k` an
 ```text
 ○ outstanding → ◐ in progress → ✓ done → ○ outstanding
 ```
+
+Markdown checklist progress appears beside each title, such as `2/4`. Press `d` or click a todo's title to expand or collapse its context and checklist; click its status icon to cycle status.
 
 Press `Tab` or click the `SESSION`/`PROJECT` label to switch scope. The controller follows the board's scope, so automatic visibility and clearing stay consistent. Press `c` to clear completed todos in the current scope (with confirmation), or `q` to close the pane. IDs, session tags, and category tags are intentionally hidden. The board polls `.pi/todos` every 700ms, so tool and board changes stay synchronized.
 
@@ -81,7 +85,7 @@ Do not pass `--cwd`: Herdr normally runs the command from the plugin root, where
 - `features/env.ts` — dotenv loading and `/env`
 - `features/footer.ts` — custom session footer
 - `features/codex-usage.ts` — read-only Codex usage and banked-reset API integration
-- `features/herdr-todos.ts` — Pi session tagging, board lifecycle, scope, visibility, and `/herdr-todos`
+- `features/herdr-todos.ts` — todo guidance, `/todo`, session tagging, board lifecycle, scope, and visibility
 - `features/mru.ts` — slash-command recency and editor integration
 - `herdr-plugin/board.js` — interactive terminal board
 - `herdr-plugin/todo-store.js` — shared parsing, filtering, transitions, and clearing

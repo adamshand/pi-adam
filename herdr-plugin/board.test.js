@@ -24,6 +24,51 @@ async function waitFor(predicate, message) {
 	assert.fail(message);
 }
 
+test("checklist progress is visible and details toggle with d or a title click", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-adam-board-details-"));
+	const todoDirectory = join(cwd, ".pi", "todos");
+	mkdirSync(todoDirectory, { recursive: true });
+	writeFileSync(join(todoDirectory, "details.md"), `${JSON.stringify({
+		id: "details",
+		title: "Deliver useful outcome",
+		status: "open",
+		tags: ["session:session-one"],
+		created_at: "details",
+	}, null, 2)}\n\nKeep this concise context visible on demand.\n\n- [x] First result\n- [ ] Remaining result\n`);
+
+	let output = "";
+	const board = spawn(process.execPath, [boardPath.pathname], {
+		env: {
+			...process.env,
+			PI_ADAM_TODO_CWD: cwd,
+			PI_ADAM_TODO_SESSION_ID: "session-one",
+			PI_ADAM_TODO_SCOPE: "session",
+			PI_ADAM_TODO_INTERVAL_MS: "10000",
+		},
+		stdio: ["pipe", "pipe", "pipe"],
+	});
+	board.stdout.on("data", (chunk) => { output += chunk.toString("utf8"); });
+
+	try {
+		await waitFor(() => latestScreen(output).includes("Deliver useful outcome"), "board did not render the todo");
+		assert.match(latestScreen(output), /1\/2/);
+		assert.ok(!latestScreen(output).includes("concise context"));
+
+		board.stdin.write("d");
+		await waitFor(() => latestScreen(output).includes("concise context") && latestScreen(output).includes("First result"), "d did not expand todo details");
+		assert.ok(latestScreen(output).includes("Remaining result"));
+
+		board.stdin.write("d");
+		await waitFor(() => !latestScreen(output).includes("concise context"), "d did not collapse todo details");
+		board.stdin.write("\x1b[<0;8;4M");
+		await waitFor(() => latestScreen(output).includes("concise context"), "clicking the title did not expand todo details");
+	} finally {
+		board.kill("SIGTERM");
+		await new Promise((resolve) => board.once("exit", resolve));
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
 test("Tab and the clickable scope label toggle between session and project todos", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-adam-board-scope-"));
 	const todoDirectory = join(cwd, ".pi", "todos");
