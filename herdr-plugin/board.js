@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import { clearCompleted, cycleTodo, isCompleted, listTodos, todoState } from "./todo-store.js";
+import { readScope, writeScope } from "./scope-state.js";
 
 const cwd = process.env.PI_ADAM_TODO_CWD || process.env.PWD || process.cwd();
 const sessionId = process.env.PI_ADAM_TODO_SESSION_ID || "";
-const scope = process.env.PI_ADAM_TODO_SCOPE === "project" ? "project" : "session";
+const statePath = process.env.PI_ADAM_TODO_STATE_PATH || "";
+let scope = readScope(statePath, process.env.PI_ADAM_TODO_SCOPE === "project" ? "project" : "session");
 const intervalMs = Number(process.env.PI_ADAM_TODO_INTERVAL_MS || 700);
 
 const ansi = {
@@ -77,6 +79,7 @@ function ensureSelection(todos) {
 function render() {
 	const width = Math.max(24, process.stdout.columns || 40);
 	const height = Math.max(10, process.stdout.rows || 24);
+	scope = readScope(statePath, scope);
 	const todos = loadTodos();
 	const total = todos.length;
 	const done = todos.filter(isCompleted).length;
@@ -89,7 +92,7 @@ function render() {
 	const scopeLabel = scope === "project" ? "PROJECT" : "SESSION";
 
 	const lines = [];
-	lines.push(`${ansi.bold}${ansi.white} PI TASKS${ansi.reset} ${ansi.dim}· ${scopeLabel}${ansi.reset} ${bar(done, total, Math.min(10, Math.max(4, width - 35)))} ${ansi.bold}${done}/${total}${ansi.reset} ${ansi.dim}${pct}%${ansi.reset}`);
+	lines.push(`${ansi.bold}${ansi.white} PI TASKS${ansi.reset} ${ansi.dim}· ${ansi.reset}${ansi.cyan}${scopeLabel}${ansi.reset} ${bar(done, total, Math.min(10, Math.max(4, width - 35)))} ${ansi.bold}${done}/${total}${ansi.reset} ${ansi.dim}${pct}%${ansi.reset}`);
 	lines.push(`${active ? `${ansi.yellow}${active} unfinished${ansi.reset}` : `${ansi.green}all clear${ansi.reset}`} ${ansi.dim}· click an icon to change status${ansi.reset}`);
 	lines.push(`${ansi.dim}${"─".repeat(Math.max(4, width - 1))}${ansi.reset}`);
 
@@ -110,7 +113,7 @@ function render() {
 
 	while (lines.length < height - 2) lines.push("");
 	const position = selectedIndex >= 0 ? `${selectedIndex + 1}/${total}` : "0/0";
-	lines.push(`${ansi.dim} ↑↓/jk select · space cycle · c clear · q close · ${position}${ansi.reset}`);
+	lines.push(`${ansi.dim} ↑↓/jk select · space cycle · tab/click scope · c clear · q close · ${position}${ansi.reset}`);
 	if (confirmingClear) {
 		const count = todos.filter(isCompleted).length;
 		lines.push(`${ansi.yellow} Delete ${count} completed ${scope} todo${count === 1 ? "" : "s"}? y/N${ansi.reset}`);
@@ -143,6 +146,18 @@ function cycleSelected(id = selectedId) {
 	render();
 }
 
+function toggleScope() {
+	scope = scope === "session" ? "project" : "session";
+	try {
+		writeScope(statePath, scope);
+		confirmingClear = false;
+		setFlash(`Showing ${scope} todos.`);
+	} catch (error) {
+		setFlash(`Could not change scope: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	render();
+}
+
 function requestClear() {
 	const count = loadTodos().filter(isCompleted).length;
 	if (count === 0) {
@@ -168,9 +183,15 @@ function handleMouse(input) {
 		const column = Number(match[2]);
 		const row = Number(match[3]);
 		const pressed = match[4] === "M";
-		if (!pressed || button !== 0 || column > 4) continue;
-		const id = visibleRows.get(row);
-		if (id) cycleSelected(id);
+		if (!pressed || button !== 0) continue;
+		if (row === 1 && column >= 13 && column <= 19) {
+			toggleScope();
+			continue;
+		}
+		if (column <= 4) {
+			const id = visibleRows.get(row);
+			if (id) cycleSelected(id);
+		}
 	}
 	return input.replace(mouse, "");
 }
@@ -198,7 +219,8 @@ process.stdin.on("data", (chunk) => {
 		cleanup();
 		process.exit(0);
 	}
-	if (input.includes("\x1b[A") || input === "k") moveSelection(-1);
+	if (input === "\t") toggleScope();
+	else if (input.includes("\x1b[A") || input === "k") moveSelection(-1);
 	else if (input.includes("\x1b[B") || input === "j") moveSelection(1);
 	else if (input === " " || input === "\r") cycleSelected();
 	else if (input.toLowerCase() === "c") requestClear();

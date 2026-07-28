@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { registerHerdrTodosFeature } from "./herdr-todos.ts";
 import { listTodos, sessionTag, todoState } from "../herdr-plugin/todo-store.js";
@@ -120,7 +120,7 @@ test("/todo prompts for a title and cancellation creates nothing", async () => {
 	}
 });
 
-test("adding a todo automatically opens its Herdr board", async () => {
+test("adding a todo opens its board and board scope changes reach the controller", async () => {
 	const previousEnv = {
 		herdr: process.env.HERDR_ENV,
 		pane: process.env.HERDR_PANE_ID,
@@ -133,6 +133,7 @@ test("adding a todo automatically opens its Herdr board", async () => {
 	const handlers = new Map<string, (...args: any[]) => any>();
 	const commands = new Map<string, { handler: (...args: any[]) => any }>();
 	const executions: string[][] = [];
+	const notifications: string[] = [];
 	const pi = {
 		on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
 		registerCommand(name: string, command: { handler: (...args: any[]) => any }) { commands.set(name, command); },
@@ -148,7 +149,7 @@ test("adding a todo automatically opens its Herdr board", async () => {
 	const ctx = {
 		cwd,
 		sessionManager: { getSessionId: () => "session-one" },
-		ui: { notify() {}, async confirm() { return true; }, async input() { return undefined; } },
+		ui: { notify(message: string) { notifications.push(message); }, async confirm() { return true; }, async input() { return undefined; } },
 	};
 
 	try {
@@ -156,7 +157,16 @@ test("adding a todo automatically opens its Herdr board", async () => {
 		await handlers.get("session_start")?.({}, ctx);
 		await commands.get("todo")?.handler("Open the board", ctx);
 
-		assert.ok(executions.some((args) => args[0] === "plugin" && args[1] === "pane" && args[2] === "open"));
+		const openArgs = executions.find((args) => args[0] === "plugin" && args[1] === "pane" && args[2] === "open");
+		assert.ok(openArgs);
+		const stateSetting = openArgs.find((arg) => arg.startsWith("PI_ADAM_TODO_STATE_PATH="));
+		assert.ok(stateSetting);
+		const statePath = stateSetting.slice("PI_ADAM_TODO_STATE_PATH=".length);
+		mkdirSync(dirname(statePath), { recursive: true });
+		writeFileSync(statePath, "project\n");
+		await commands.get("herdr-todos")?.handler("refresh", ctx);
+		await commands.get("herdr-todos")?.handler("status", ctx);
+		assert.ok(notifications.some((message) => message.includes("project todos")));
 	} finally {
 		await handlers.get("session_shutdown")?.({}, ctx);
 		rmSync(cwd, { recursive: true, force: true });

@@ -1,4 +1,8 @@
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { readScope, writeScope } from "../herdr-plugin/scope-state.js";
 import { clearCompleted, createTodo, isCompleted, listTodos, SESSION_TAG_PREFIX, sessionTag } from "../herdr-plugin/todo-store.js";
 
 type Scope = "session" | "project";
@@ -79,6 +83,7 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 	let open = false;
 	let boardPaneId: string | undefined;
 	let currentSessionId = "";
+	let scopeStatePath = "";
 	let scope: Scope = "session";
 	let visibility: Visibility = "auto";
 	let lastSignature: string | undefined;
@@ -142,6 +147,7 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 				"--env", `PI_ADAM_TODO_CWD=${ctx.cwd}`,
 				"--env", `PI_ADAM_TODO_SESSION_ID=${currentSessionId}`,
 				"--env", `PI_ADAM_TODO_SCOPE=${scope}`,
+				"--env", `PI_ADAM_TODO_STATE_PATH=${scopeStatePath}`,
 				"--no-focus",
 			];
 			const sourcePane = process.env.HERDR_PANE_ID;
@@ -172,8 +178,11 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 		if (!isHerdrPane() || reconciling || !currentSessionId) return;
 		reconciling = true;
 		try {
+			const sharedScope = readScope(scopeStatePath, scope) as Scope;
+			const scopeChanged = sharedScope !== scope;
+			if (scopeChanged) scope = sharedScope;
 			const current = todoSnapshot(ctx.cwd, scope, currentSessionId);
-			const changed = current.signature !== lastSignature;
+			const changed = scopeChanged || current.signature !== lastSignature;
 			lastSignature = current.signature;
 			lastActive = current.active;
 
@@ -216,7 +225,9 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		currentSessionId = ctx.sessionManager.getSessionId();
-		scope = "session";
+		const projectKey = createHash("sha256").update(ctx.cwd).digest("hex").slice(0, 12);
+		scopeStatePath = join(tmpdir(), "pi-adam-herdr-todos", projectKey, `${currentSessionId}.scope`);
+		scope = readScope(scopeStatePath, "session") as Scope;
 		visibility = "auto";
 		open = false;
 		opening = false;
@@ -318,8 +329,8 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 				}
 				if (scope !== value) {
 					scope = value;
+					writeScope(scopeStatePath, scope);
 					lastSignature = undefined;
-					if (open) await closeBoard();
 					await reconcile(ctx, { force: true });
 				}
 				ctx.ui.notify(`pi-adam: showing ${scope} todos`, "info");

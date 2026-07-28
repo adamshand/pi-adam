@@ -56,7 +56,7 @@ In the board, click a status icon or select a row with `↑`/`↓` or `j`/`k` an
 ○ outstanding → ◐ in progress → ✓ done → ○ outstanding
 ```
 
-Press `c` to clear completed todos in the board's current scope (with confirmation), or `q` to close the pane. IDs, session tags, and category tags are intentionally hidden. The board polls `.pi/todos` every 700ms, so tool and board changes stay synchronized.
+Press `Tab` or click the `SESSION`/`PROJECT` label to switch scope. The controller follows the board's scope, so automatic visibility and clearing stay consistent. Press `c` to clear completed todos in the current scope (with confirmation), or `q` to close the pane. IDs, session tags, and category tags are intentionally hidden. The board polls `.pi/todos` every 700ms, so tool and board changes stay synchronized.
 
 To open the plugin pane manually from a Pi pane:
 
