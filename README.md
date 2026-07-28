@@ -5,7 +5,7 @@ Personal pi quality-of-life extension.
 ## Features
 
 - Slash-command autocomplete is sorted by most recently used commands.
-- Custom footer shows token totals, cost, context usage, response speed, Codex 5-hour/weekly usage and banked resets, model, thinking level, and git branch.
+- Compact custom footer keeps model and thinking level on the left, with cost, context usage, and Codex limits right-aligned.
 - Loads dotenv-style variables from `~/.pi/env`, then trusted project `.pi/env` files. Existing shell variables take precedence.
 - `/env` lists variables declared by those files with values redacted.
 - `/codex-usage` shows Codex usage, reset times, and available banked resets; `/codex-usage-refresh` refreshes it immediately.

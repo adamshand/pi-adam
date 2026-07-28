@@ -3,9 +3,6 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { registerCodexUsageFeature } from "./codex-usage.ts";
 
 type AssistantUsage = {
-	input?: number;
-	output?: number;
-	reasoning?: number;
 	cost?: { total?: number };
 };
 
@@ -17,17 +14,9 @@ function getAssistantUsage(message: unknown): AssistantUsage | undefined {
 	return (message as MessageWithUsage).usage;
 }
 
-function formatCompactNumber(n: number, decimals = 1): string {
-	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(decimals)}M`;
-	if (n >= 1000) return `${(n / 1000).toFixed(decimals)}k`;
-	return `${n}`;
-}
-
 export function registerFooterFeature(pi: ExtensionAPI): void {
 	let footerInstalled = false;
 	let thinkingLevel = "high";
-	let lastSpeed: number | null = null;
-	let assistantStartTime: number | null = null;
 	let requestFooterRender: (() => void) | undefined;
 	const getCodexUsage = registerCodexUsageFeature(pi, () => requestFooterRender?.());
 
@@ -40,21 +29,8 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 		requestFooterRender?.();
 	});
 
-	pi.on("message_start", (event) => {
-		if (event.message.role === "assistant") assistantStartTime = Date.now();
-	});
-
 	pi.on("message_end", (event) => {
-		if (event.message.role !== "assistant") return;
-
-		const usage = getAssistantUsage(event.message);
-		const outputTokens = usage?.output ?? 0;
-		const elapsed = assistantStartTime ? (Date.now() - assistantStartTime) / 1000 : 0;
-
-		// Skip if elapsed is unreasonably small, e.g. restored from session.
-		if (elapsed > 0.5 && outputTokens > 0) lastSpeed = Math.round(outputTokens / elapsed);
-		assistantStartTime = null;
-		requestFooterRender?.();
+		if (event.message.role === "assistant") requestFooterRender?.();
 	});
 
 	pi.on("session_start", (_event, ctx) => {
@@ -72,21 +48,13 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 				},
 				invalidate() {},
 				render(width: number): string[] {
-					let input = 0,
-						output = 0,
-						cost = 0,
-						reasoning = 0;
+					let cost = 0;
 					for (const entry of ctx.sessionManager.getBranch()) {
 						if (entry.type === "message" && entry.message.role === "assistant") {
-							const usage = getAssistantUsage(entry.message);
-							input += usage?.input ?? 0;
-							output += usage?.output ?? 0;
-							cost += usage?.cost?.total ?? 0;
-							reasoning += usage?.reasoning ?? 0;
+							cost += getAssistantUsage(entry.message)?.cost?.total ?? 0;
 						}
 					}
 
-					const sep = " " + theme.fg("dim", "│") + " ";
 					const contextUsage = ctx.getContextUsage();
 					const ctxLimit = contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
 					const ctxTokens = contextUsage?.tokens ?? 0;
@@ -94,14 +62,10 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 					if (ctxLimit > 0) {
 						const pct = (ctxTokens / ctxLimit) * 100;
 						const color = pct > 80 ? "error" : pct > 50 ? "warning" : "success";
-						contextPct = theme.fg(color, `${pct.toFixed(1)}%`);
+						contextPct = theme.fg("dim", "ctx ") + theme.fg(color, `${pct.toFixed(1)}%`);
 					}
 
-					const arrowUp = theme.fg("success", "↑") + theme.fg("text", formatCompactNumber(input, 0));
-					const arrowDown = theme.fg("error", "↓") + theme.fg("text", formatCompactNumber(output, 0));
-					const reasoningStr = reasoning > 0 ? theme.fg("accent", "R") + theme.fg("text", formatCompactNumber(reasoning, 0)) : "";
 					const costStr = theme.fg("warning", `$${cost.toFixed(2)}`);
-					const speedStr = lastSpeed !== null ? theme.fg("mdLink", `${formatCompactNumber(lastSpeed)} t/s`) : "";
 					const codexUsage = getCodexUsage();
 					const colorizeCodexUsage = (used: number | undefined) => {
 						const text = used === undefined ? "?%" : `${Math.round(used)}%`;
@@ -134,18 +98,25 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 					};
 					const levelDot = theme.fg(levelColors[thinkingLevel] ?? "accent", "●");
 					const modelStr = theme.fg("accent", ctx.model?.id ?? "no-model");
-					const levelStr = theme.fg("muted", thinkingLevel);
-					const branch = footerData.getGitBranch();
-					const gitStr = branch ? theme.fg("toolDiffAdded", ` ${branch}`) : "";
+					const levelStr = `${levelDot} ${theme.fg("muted", thinkingLevel)}`;
+					const divider = " " + theme.fg("dim", "•") + " ";
+					const left = [modelStr, levelStr].join(divider);
+					const right = [costStr, contextPct, codexStr].filter(Boolean).join(divider);
+					const rightWidth = visibleWidth(right);
+					const minimumGap = right ? 2 : 0;
+					const leftBudget = Math.max(0, width - rightWidth - minimumGap);
 
-					const left = [arrowUp, arrowDown, speedStr, costStr, reasoningStr, contextPct, codexStr].filter(Boolean).join(sep);
-					const right = [modelStr, `${levelDot} ${levelStr}`, gitStr]
-						.filter(Boolean)
-						.join(" " + theme.fg("dim", "•") + " ");
-					const leftContent = left + (right ? " " + theme.fg("dim", "│") + " " : "");
-					const pad = " ".repeat(Math.max(1, width - visibleWidth(leftContent) - visibleWidth(right)));
+					if (leftBudget === 0) return [truncateToWidth(right, width)];
 
-					return [truncateToWidth(leftContent + pad + right, width)];
+					let fittedLeft = left;
+					if (visibleWidth(left) > leftBudget) {
+						const fixedWidth = visibleWidth(divider) + visibleWidth(levelStr);
+						fittedLeft = leftBudget > fixedWidth
+							? truncateToWidth(modelStr, leftBudget - fixedWidth) + divider + levelStr
+							: truncateToWidth(levelStr, leftBudget);
+					}
+					const pad = " ".repeat(Math.max(minimumGap, width - visibleWidth(fittedLeft) - rightWidth));
+					return [truncateToWidth(fittedLeft + pad + right, width)];
 				},
 			};
 		});
