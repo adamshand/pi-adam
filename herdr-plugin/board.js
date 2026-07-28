@@ -131,16 +131,15 @@ function ensureSelection(todos) {
 }
 
 function render() {
-	const width = Math.max(24, process.stdout.columns || 40);
+	// Leave the terminal's last column unused: writing into it can trigger an automatic wrap.
+	const width = Math.max(8, (process.stdout.columns || 40) - 1);
 	const height = Math.max(10, process.stdout.rows || 24);
 	scope = readScope(statePath, scope);
 	const todos = loadTodos();
 	const total = todos.length;
 	const done = todos.filter(isCompleted).length;
-	const active = total - done;
-	const pct = total === 0 ? 0 : Math.round((done / total) * 100);
 	const selectedIndex = ensureSelection(todos);
-	const available = Math.max(1, height - 5);
+	const available = Math.max(1, height - 4);
 	const expandedTodo = todos.find((todo) => todo.id === expandedId);
 	const allDetailLines = expandedTodo ? todoDetailLines(expandedTodo, width) : [];
 	const detailBudget = expandedTodo ? Math.min(allDetailLines.length, Math.max(1, available - 1)) : 0;
@@ -152,13 +151,14 @@ function render() {
 	const scopeLabel = scope === "project" ? "PROJECT" : "SESSION";
 
 	const lines = [];
-	lines.push(`${ansi.bold}${ansi.white} PI TASKS${ansi.reset} ${ansi.dim}· ${ansi.reset}${ansi.cyan}${scopeLabel}${ansi.reset} ${bar(done, total, Math.min(10, Math.max(4, width - 35)))} ${ansi.bold}${done}/${total}${ansi.reset} ${ansi.dim}${pct}%${ansi.reset}`);
-	lines.push(`${active ? `${ansi.yellow}${active} unfinished${ansi.reset}` : `${ansi.green}all clear${ansi.reset}`} ${ansi.dim}· click an icon to change status${ansi.reset}`);
-	lines.push(`${ansi.dim}${"─".repeat(Math.max(4, width - 1))}${ansi.reset}`);
+	const countLabel = `${done}/${total}`;
+	const barWidth = Math.max(1, Math.min(10, width - scopeLabel.length - countLabel.length - 4));
+	lines.push(` ${ansi.bold}${ansi.cyan}${scopeLabel}${ansi.reset} ${bar(done, total, barWidth)} ${ansi.bold}${countLabel}${ansi.reset}`);
+	lines.push(`${ansi.dim}${"─".repeat(width)}${ansi.reset}`);
 
 	visibleRows = new Map();
 	if (todos.length === 0) {
-		lines.push(` ${ansi.dim}No ${scope} todos.${ansi.reset}`);
+		lines.push(`${ansi.dim}${fit(` No ${scope} todos.`, width)}${ansi.reset}`);
 	} else {
 		for (const todo of shown) {
 			const terminalRow = lines.length + 1;
@@ -179,7 +179,7 @@ function render() {
 	lines.push(`${ansi.dim}${fit(` ↑↓/jk select · space cycle · d details · tab/click scope · c clear · q close · ${position}`, width)}${ansi.reset}`);
 	if (confirmingClear) {
 		const count = todos.filter(isCompleted).length;
-		lines.push(`${ansi.yellow} Delete ${count} completed ${scope} todo${count === 1 ? "" : "s"}? y/N${ansi.reset}`);
+		lines.push(`${ansi.yellow}${fit(` Delete ${count} completed ${scope} todo${count === 1 ? "" : "s"}? y/N`, width)}${ansi.reset}`);
 	} else {
 		if (flash && Date.now() > flashUntil) flash = "";
 		lines.push(flash ? `${ansi.cyan} ${fit(flash, width - 2)}${ansi.reset}` : `${ansi.dim} ${intervalMs}ms refresh${ansi.reset}`);
@@ -257,7 +257,7 @@ function handleMouse(input) {
 		const row = Number(match[3]);
 		const pressed = match[4] === "M";
 		if (!pressed || button !== 0) continue;
-		if (row === 1 && column >= 13 && column <= 19) {
+		if (row === 1 && column >= 2 && column <= 8) {
 			toggleScope();
 			continue;
 		}

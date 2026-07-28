@@ -51,8 +51,16 @@ test("checklist progress is visible and details toggle with d or a title click",
 
 	try {
 		await waitFor(() => latestScreen(output).includes("Deliver useful outcome"), "board did not render the todo");
-		assert.match(latestScreen(output), /1\/2/);
-		assert.ok(!latestScreen(output).includes("concise context"));
+		const initialScreen = latestScreen(output);
+		const initialLines = initialScreen.split(/\r?\n/).filter(Boolean);
+		assert.match(initialLines[0], /^ SESSION .* 0\/1$/);
+		assert.ok(!initialScreen.includes("PI TASKS"));
+		assert.ok(!initialScreen.includes("%"));
+		assert.ok(!initialScreen.includes("unfinished"));
+		assert.ok(!initialScreen.includes("click an icon"));
+		assert.ok(initialLines.every((line) => line.length <= 39));
+		assert.match(initialScreen, /1\/2/);
+		assert.ok(!initialScreen.includes("concise context"));
 
 		board.stdin.write("d");
 		await waitFor(() => latestScreen(output).includes("concise context") && latestScreen(output).includes("First result"), "d did not expand todo details");
@@ -60,7 +68,7 @@ test("checklist progress is visible and details toggle with d or a title click",
 
 		board.stdin.write("d");
 		await waitFor(() => !latestScreen(output).includes("concise context"), "d did not collapse todo details");
-		board.stdin.write("\x1b[<0;8;4M");
+		board.stdin.write("\x1b[<0;8;3M");
 		await waitFor(() => latestScreen(output).includes("concise context"), "clicking the title did not expand todo details");
 	} finally {
 		board.kill("SIGTERM");
@@ -102,7 +110,7 @@ test("Tab and the clickable scope label toggle between session and project todos
 		await waitFor(() => latestScreen(output).includes("PROJECT") && latestScreen(output).includes("Project task"), "Tab did not render project scope");
 		assert.equal(readFileSync(statePath, "utf8"), "project\n");
 
-		board.stdin.write("\x1b[<0;14;1M");
+		board.stdin.write("\x1b[<0;4;1M");
 		await waitFor(() => latestScreen(output).includes("SESSION") && !latestScreen(output).includes("Project task"), "clicking the scope label did not restore session scope");
 		assert.equal(readFileSync(statePath, "utf8"), "session\n");
 	} finally {
