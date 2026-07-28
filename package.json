@@ -6,7 +6,7 @@
   "description": "Personal pi quality-of-life extension.",
   "keywords": ["pi-package"],
   "scripts": {
-    "test": "node --test features/*.test.ts"
+    "test": "node --test features/*.test.ts herdr-plugin/*.test.js"
   },
   "pi": {
     "extensions": ["./index.ts"]
