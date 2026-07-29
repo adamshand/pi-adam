@@ -5,7 +5,9 @@ Personal pi quality-of-life extension.
 ## Features
 
 - Slash-command autocomplete is sorted by most recently used commands.
-- Compact custom footer keeps model and thinking level on the left, with cost, context usage, and Codex limits right-aligned.
+- Compact custom footer keeps model, thinking level, and active Codex Fast mode on the left, with cost, context usage, and Codex limits right-aligned.
+- `/fast` toggles Fast mode for supported GPT-5.4–5.6 Codex models using ChatGPT OAuth; `alt+shift+tab` does the same.
+- `codex_image` generates and saves images through Codex's native `gpt-image-2` hosted tool.
 - Loads dotenv-style variables from `~/.pi/env`, then trusted project `.pi/env` files. Existing shell variables take precedence.
 - `/env` lists variables declared by those files with values redacted.
 - `/codex-usage` shows Codex usage, reset times, and available banked resets; `/codex-usage-refresh` refreshes it immediately.
@@ -112,6 +114,9 @@ Do not pass `--cwd`: Herdr normally runs the command from the plugin root, where
 
 - `features/env.ts` — dotenv loading and `/env`
 - `features/footer.ts` — custom session footer
+- `features/codex-fast.ts` — guarded, session-persisted Codex Fast mode
+- `features/codex-image.ts` — Codex-hosted image generation and file saving
+- `features/codex-image-utils.ts` — image payload and SSE parsing helpers
 - `features/codex-usage.ts` — read-only Codex usage and banked-reset API integration
 - `features/herdr-session-name.ts` — Pi `/name` synchronization with Herdr tabs and agent titles
 - `features/herdr-todos.ts` — todo/idea guidance and tools, board lifecycle, views, and visibility
