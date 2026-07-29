@@ -14,6 +14,9 @@ function getAssistantUsage(message: unknown): AssistantUsage | undefined {
 	return (message as MessageWithUsage).usage;
 }
 
+const USAGE_VALUE_COLOR = "\x1b[38;2;36;131;123m"; // cyan-600 · #24837B
+const colorizeUsageValue = (text: string): string => `${USAGE_VALUE_COLOR}${text}\x1b[39m`;
+
 export function registerFooterFeature(pi: ExtensionAPI): void {
 	let footerInstalled = false;
 	let thinkingLevel = "high";
@@ -61,15 +64,14 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 					let contextPct = "";
 					if (ctxLimit > 0) {
 						const pct = (ctxTokens / ctxLimit) * 100;
-						const color = pct > 80 ? "error" : pct > 50 ? "warning" : "success";
-						contextPct = theme.fg("dim", "ctx ") + theme.fg("warning", `${pct.toFixed(1)}%`);
+						contextPct = theme.fg("dim", "ctx ") + colorizeUsageValue(`${pct.toFixed(1)}%`);
 					}
 
-					const costStr = theme.fg("dim", "$") + theme.fg("warning", cost.toFixed(2));
+					const costStr = theme.fg("dim", "$") + colorizeUsageValue(cost.toFixed(2));
 					const codexUsage = getCodexUsage();
 					const colorizeCodexUsage = (used: number | undefined) => {
 						const text = used === undefined ? "?%" : `${Math.round(used)}%`;
-						return theme.fg("warning", text);
+						return colorizeUsageValue(text);
 					};
 					const codexStr = codexUsage
 						? [
@@ -80,7 +82,7 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 									? `${theme.fg("dim", "wk ")}${colorizeCodexUsage(codexUsage.weeklyUsed)}`
 									: "",
 								codexUsage.availableResets !== undefined
-									? `${theme.fg("dim", "↺")}${theme.fg("warning", String(codexUsage.availableResets))}`
+									? `${theme.fg("dim", "↺")}${colorizeUsageValue(String(codexUsage.availableResets))}`
 									: "",
 							].filter(Boolean).join(" ")
 						: "";
