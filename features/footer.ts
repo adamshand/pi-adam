@@ -62,17 +62,14 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 					if (ctxLimit > 0) {
 						const pct = (ctxTokens / ctxLimit) * 100;
 						const color = pct > 80 ? "error" : pct > 50 ? "warning" : "success";
-						contextPct = theme.fg("dim", "ctx ") + theme.fg(color, `${pct.toFixed(1)}%`);
+						contextPct = theme.fg("dim", "ctx ") + theme.fg("warning", `${pct.toFixed(1)}%`);
 					}
 
-					const costStr = theme.fg("warning", `$${cost.toFixed(2)}`);
+					const costStr = theme.fg("dim", "$") + theme.fg("warning", cost.toFixed(2));
 					const codexUsage = getCodexUsage();
 					const colorizeCodexUsage = (used: number | undefined) => {
 						const text = used === undefined ? "?%" : `${Math.round(used)}%`;
-						if (used === undefined) return theme.fg("muted", text);
-						if (used >= 90) return theme.fg("error", text);
-						if (used >= 70) return theme.fg("warning", text);
-						return theme.fg("success", text);
+						return theme.fg("warning", text);
 					};
 					const codexStr = codexUsage
 						? [
@@ -83,22 +80,13 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 									? `${theme.fg("dim", "wk ")}${colorizeCodexUsage(codexUsage.weeklyUsed)}`
 									: "",
 								codexUsage.availableResets !== undefined
-									? `${theme.fg("dim", "↺")}${theme.fg("muted", String(codexUsage.availableResets))}`
+									? `${theme.fg("dim", "↺")}${theme.fg("warning", String(codexUsage.availableResets))}`
 									: "",
 							].filter(Boolean).join(" ")
 						: "";
 
-					const levelColors: Record<string, Parameters<typeof theme.fg>[0]> = {
-						off: "thinkingOff",
-						minimal: "thinkingMinimal",
-						low: "thinkingLow",
-						medium: "thinkingMedium",
-						high: "thinkingHigh",
-						"extra-high": "thinkingXhigh",
-					};
-					const levelDot = theme.fg(levelColors[thinkingLevel] ?? "accent", "●");
 					const modelStr = theme.fg("accent", ctx.model?.id ?? "no-model");
-					const levelStr = `${levelDot} ${theme.fg("muted", thinkingLevel)}`;
+					const levelStr = theme.fg("muted", thinkingLevel);
 					const divider = " " + theme.fg("dim", "•") + " ";
 					const left = [modelStr, levelStr].join(divider);
 					const right = [costStr, contextPct, codexStr].filter(Boolean).join(divider);
