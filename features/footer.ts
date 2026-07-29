@@ -14,8 +14,10 @@ function getAssistantUsage(message: unknown): AssistantUsage | undefined {
 	return (message as MessageWithUsage).usage;
 }
 
-const USAGE_VALUE_COLOR = "\x1b[38;2;36;131;123m"; // cyan-600 · #24837B
-const colorizeUsageValue = (text: string): string => `${USAGE_VALUE_COLOR}${text}\x1b[39m`;
+const PRIMARY_VALUE_COLOR = "\x1b[38;2;36;131;123m"; // cyan-600 · #24837B
+const SEPARATOR_COLOR = "\x1b[38;2;160;47;111m"; // magenta-600 · #A02F6F
+const colorizePrimaryValue = (text: string): string => `${PRIMARY_VALUE_COLOR}${text}\x1b[39m`;
+const colorizeSeparator = (text: string): string => `${SEPARATOR_COLOR}${text}\x1b[39m`;
 
 export function registerFooterFeature(pi: ExtensionAPI): void {
 	let footerInstalled = false;
@@ -64,14 +66,14 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 					let contextPct = "";
 					if (ctxLimit > 0) {
 						const pct = (ctxTokens / ctxLimit) * 100;
-						contextPct = theme.fg("dim", "ctx ") + colorizeUsageValue(`${pct.toFixed(1)}%`);
+						contextPct = theme.fg("dim", "ctx ") + colorizePrimaryValue(`${pct.toFixed(1)}%`);
 					}
 
-					const costStr = theme.fg("dim", "$") + colorizeUsageValue(cost.toFixed(2));
+					const costStr = theme.fg("dim", "$") + colorizePrimaryValue(cost.toFixed(2));
 					const codexUsage = getCodexUsage();
 					const colorizeCodexUsage = (used: number | undefined) => {
 						const text = used === undefined ? "?%" : `${Math.round(used)}%`;
-						return colorizeUsageValue(text);
+						return colorizePrimaryValue(text);
 					};
 					const codexStr = codexUsage
 						? [
@@ -82,14 +84,14 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 									? `${theme.fg("dim", "wk ")}${colorizeCodexUsage(codexUsage.weeklyUsed)}`
 									: "",
 								codexUsage.availableResets !== undefined
-									? `${theme.fg("dim", "↺")}${colorizeUsageValue(String(codexUsage.availableResets))}`
+									? `${theme.fg("dim", "↺")}${colorizePrimaryValue(String(codexUsage.availableResets))}`
 									: "",
 							].filter(Boolean).join(" ")
 						: "";
 
-					const modelStr = theme.fg("accent", ctx.model?.id ?? "no-model");
-					const levelStr = theme.fg("muted", thinkingLevel);
-					const divider = " " + theme.fg("dim", "•") + " ";
+					const modelStr = colorizePrimaryValue(ctx.model?.id ?? "no-model");
+					const levelStr = colorizePrimaryValue(thinkingLevel);
+					const divider = " " + colorizeSeparator("•") + " ";
 					const left = [modelStr, levelStr].join(divider);
 					const right = [costStr, contextPct, codexStr].filter(Boolean).join(divider);
 					const rightWidth = visibleWidth(right);
