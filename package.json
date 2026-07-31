@@ -6,12 +6,13 @@
   "description": "Personal pi quality-of-life extension.",
   "keywords": ["pi-package"],
   "scripts": {
-    "test": "node --test features/*.test.ts herdr-plugin/*.test.js"
+    "test": "node --test features/*.test.ts herdr/todos/*.test.js"
   },
   "pi": {
     "extensions": ["./index.ts"]
   },
   "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"

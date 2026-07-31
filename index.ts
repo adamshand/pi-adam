@@ -5,12 +5,14 @@ import { registerFooterFeature } from "./features/footer.ts";
 import { registerHerdrSessionNameFeature } from "./features/herdr-session-name.ts";
 import { registerHerdrTodosFeature } from "./features/herdr-todos.ts";
 import { registerMruFeature } from "./features/mru.ts";
+import { registerTodosFeature } from "./features/todos.ts";
 
 export default function piAdam(pi: ExtensionAPI): void {
 	registerCodexImageFeature(pi);
 	registerEnvFeature(pi);
 	registerFooterFeature(pi);
 	registerHerdrSessionNameFeature(pi);
+	registerTodosFeature(pi);
 	registerHerdrTodosFeature(pi);
 	registerMruFeature(pi);
 }

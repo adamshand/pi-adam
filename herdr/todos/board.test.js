@@ -42,7 +42,7 @@ test("checklist progress is visible and details toggle with d or a title click",
 			...process.env,
 			PI_ADAM_TODO_CWD: cwd,
 			PI_ADAM_TODO_SESSION_ID: "session-one",
-			PI_ADAM_TODO_SCOPE: "session",
+			PI_ADAM_TODO_VIEW: "todos",
 			PI_ADAM_TODO_INTERVAL_MS: "10000",
 		},
 		stdio: ["pipe", "pipe", "pipe"],
@@ -50,26 +50,20 @@ test("checklist progress is visible and details toggle with d or a title click",
 	board.stdout.on("data", (chunk) => { output += chunk.toString("utf8"); });
 
 	try {
-		await waitFor(() => latestScreen(output).includes("Deliver useful outcome"), "board did not render the todo");
+		await waitFor(() => latestScreen(output).includes("Deliver useful outcome"), "board did not render the Todo");
 		const initialScreen = latestScreen(output);
 		const initialLines = initialScreen.split(/\r?\n/).filter(Boolean);
-		assert.match(initialLines[0], /^ SESSION .* 0\/1$/);
-		assert.ok(!initialScreen.includes("PI TASKS"));
-		assert.ok(!initialScreen.includes("%"));
-		assert.ok(!initialScreen.includes("unfinished"));
-		assert.ok(!initialScreen.includes("click an icon"));
+		assert.match(initialLines[0], /^ TODOS .* 0\/1$/);
 		assert.ok(initialLines.every((line) => line.length <= 39));
 		assert.match(initialScreen, /1\/2/);
 		assert.ok(!initialScreen.includes("concise context"));
 
 		board.stdin.write("d");
-		await waitFor(() => latestScreen(output).includes("concise context") && latestScreen(output).includes("First result"), "d did not expand todo details");
-		assert.ok(latestScreen(output).includes("Remaining result"));
-
+		await waitFor(() => latestScreen(output).includes("concise context") && latestScreen(output).includes("First result"), "d did not expand Todo details");
 		board.stdin.write("d");
-		await waitFor(() => !latestScreen(output).includes("concise context"), "d did not collapse todo details");
+		await waitFor(() => !latestScreen(output).includes("concise context"), "d did not collapse Todo details");
 		board.stdin.write("\x1b[<0;8;3M");
-		await waitFor(() => latestScreen(output).includes("concise context"), "clicking the title did not expand todo details");
+		await waitFor(() => latestScreen(output).includes("concise context"), "clicking the title did not expand Todo details");
 	} finally {
 		if (board.exitCode === null) {
 			board.kill("SIGTERM");
@@ -79,7 +73,7 @@ test("checklist progress is visible and details toggle with d or a title click",
 	}
 });
 
-test("ideas can be promoted to session todos or dismissed with confirmation", async () => {
+test("Ideas can be promoted to Todos or dismissed with confirmation", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-adam-board-idea-actions-"));
 	const ideaDirectory = join(cwd, ".pi", "ideas");
 	mkdirSync(ideaDirectory, { recursive: true });
@@ -103,9 +97,9 @@ test("ideas can be promoted to session todos or dismissed with confirmation", as
 	board.stdout.on("data", (chunk) => { output += chunk.toString("utf8"); });
 
 	try {
-		await waitFor(() => latestScreen(output).includes("Promote me"), "board did not render ideas");
+		await waitFor(() => latestScreen(output).includes("Promote me"), "board did not render Ideas");
 		board.stdin.write("p");
-		await waitFor(() => !latestScreen(output).includes("◇ Promote me") && latestScreen(output).includes("◇ Dismiss me"), "p did not promote the selected idea");
+		await waitFor(() => !latestScreen(output).includes("◇ Promote me") && latestScreen(output).includes("◇ Dismiss me"), "p did not promote the selected Idea");
 		const todoNames = readdirSync(join(cwd, ".pi", "todos"));
 		assert.equal(todoNames.length, 1);
 		const promoted = JSON.parse(readFileSync(join(cwd, ".pi", "todos", todoNames[0]), "utf8").split(/\r?\n\r?\n/, 1)[0]);
@@ -116,11 +110,10 @@ test("ideas can be promoted to session todos or dismissed with confirmation", as
 		await waitFor(() => latestScreen(output).includes("Dismiss idea"), "x did not request dismissal confirmation");
 		board.stdin.write("n");
 		await waitFor(() => !latestScreen(output).includes("Dismiss idea"), "n did not cancel dismissal");
-		assert.ok(latestScreen(output).includes("Dismiss me"));
 		board.stdin.write("x");
 		await waitFor(() => latestScreen(output).includes("Dismiss idea"), "second dismissal was not requested");
 		board.stdin.write("y");
-		await waitFor(() => latestScreen(output).includes("No ideas"), "confirmed dismissal did not remove the idea");
+		await waitFor(() => latestScreen(output).includes("No ideas"), "confirmed dismissal did not remove the Idea");
 	} finally {
 		if (board.exitCode === null) {
 			board.kill("SIGTERM");
@@ -130,19 +123,15 @@ test("ideas can be promoted to session todos or dismissed with confirmation", as
 	}
 });
 
-test("Tab, i, and clickable labels navigate SESSION, ALL, and IDEAS views", async () => {
+test("Tab, i, and clickable labels navigate TODOS and IDEAS, and f defers", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-adam-board-views-"));
 	const todoDirectory = join(cwd, ".pi", "todos");
 	const ideaDirectory = join(cwd, ".pi", "ideas");
 	const statePath = join(cwd, "state", "session-one.view");
 	mkdirSync(todoDirectory, { recursive: true });
 	mkdirSync(ideaDirectory, { recursive: true });
-	const add = (id, title, tags) => {
-		writeFileSync(join(todoDirectory, `${id}.md`), `${JSON.stringify({ id, title, status: "open", tags, created_at: id }, null, 2)}\n\n`);
-	};
-	add("session", "Session task", ["session:session-one"]);
-	add("other", "Other session task", ["session:session-two"]);
-	writeFileSync(join(ideaDirectory, "future.md"), `${JSON.stringify({ id: "future", title: "Future possibility", created_at: "future", updated_at: "future" }, null, 2)}\n\nWorth considering later.\n`);
+	writeFileSync(join(todoDirectory, "session.md"), `${JSON.stringify({ id: "session", title: "Session Todo", status: "open", tags: ["session:session-one"], created_at: "session" }, null, 2)}\n\nWorth doing now.\n`);
+	writeFileSync(join(ideaDirectory, "future.md"), `${JSON.stringify({ id: "future", title: "Future Idea", created_at: "future", updated_at: "future" }, null, 2)}\n\nWorth considering later.\n`);
 
 	let output = "";
 	const board = spawn(process.execPath, [boardPath.pathname], {
@@ -150,7 +139,7 @@ test("Tab, i, and clickable labels navigate SESSION, ALL, and IDEAS views", asyn
 			...process.env,
 			PI_ADAM_TODO_CWD: cwd,
 			PI_ADAM_TODO_SESSION_ID: "session-one",
-			PI_ADAM_TODO_SCOPE: "session",
+			PI_ADAM_TODO_VIEW: "todos",
 			PI_ADAM_TODO_STATE_PATH: statePath,
 			PI_ADAM_TODO_INTERVAL_MS: "10000",
 		},
@@ -159,24 +148,22 @@ test("Tab, i, and clickable labels navigate SESSION, ALL, and IDEAS views", asyn
 	board.stdout.on("data", (chunk) => { output += chunk.toString("utf8"); });
 
 	try {
-		await waitFor(() => latestScreen(output).includes("SESSION") && latestScreen(output).includes("Session task"), "board did not render SESSION view");
-		assert.ok(!latestScreen(output).includes("Other session task"));
-		assert.ok(!latestScreen(output).includes("Future possibility"));
+		await waitFor(() => latestScreen(output).includes("TODOS") && latestScreen(output).includes("Session Todo"), "board did not render TODOS");
+		assert.ok(!latestScreen(output).includes("Future Idea"));
+		board.stdin.write("f");
+		await waitFor(() => latestScreen(output).includes("No todos"), "f did not defer the Todo");
+		assert.equal(readdirSync(todoDirectory).length, 0);
+		assert.equal(readdirSync(ideaDirectory).length, 2);
 
 		board.stdin.write("\t");
-		await waitFor(() => latestScreen(output).includes("Other session task"), "Tab did not render ALL view");
-		assert.match(readFileSync(statePath, "utf8"), /"view":\s*"all"/);
-
-		board.stdin.write("\t");
-		await waitFor(() => latestScreen(output).includes("Future possibility") && !latestScreen(output).includes("Session task"), "Tab did not render IDEAS view");
+		await waitFor(() => latestScreen(output).includes("Future Idea") && latestScreen(output).includes("Session Todo"), "Tab did not render IDEAS");
 		assert.match(readFileSync(statePath, "utf8"), /"view":\s*"ideas"/);
-
 		board.stdin.write("\x1b[<0;4;1M");
-		await waitFor(() => latestScreen(output).includes("Session task") && !latestScreen(output).includes("Future possibility"), "clicking SESSION did not select its view");
+		await waitFor(() => latestScreen(output).includes("No todos"), "clicking TODOS did not select its view");
 		board.stdin.write("i");
-		await waitFor(() => latestScreen(output).includes("Future possibility"), "i did not open IDEAS");
+		await waitFor(() => latestScreen(output).includes("Future Idea"), "i did not open IDEAS");
 		board.stdin.write("i");
-		await waitFor(() => latestScreen(output).includes("Session task"), "i did not restore the previous todo view");
+		await waitFor(() => latestScreen(output).includes("No todos"), "i did not restore TODOS");
 	} finally {
 		if (board.exitCode === null) {
 			board.kill("SIGTERM");

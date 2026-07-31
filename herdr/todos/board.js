@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-import { deleteIdea, listIdeas, promoteIdea } from "./idea-store.js";
+import { deferTodo, deleteIdea, listIdeas, promoteIdea } from "./idea-store.js";
 import { clearCompleted, cycleTodo, isCompleted, listTodos, todoState } from "./todo-store.js";
 import { BOARD_VIEWS, readViewState, writeViewState } from "./view-state.js";
 
 const cwd = process.env.PI_ADAM_TODO_CWD || process.env.PWD || process.cwd();
 const sessionId = process.env.PI_ADAM_TODO_SESSION_ID || "";
 const statePath = process.env.PI_ADAM_TODO_STATE_PATH || "";
-const fallbackView = process.env.PI_ADAM_TODO_VIEW || (process.env.PI_ADAM_TODO_SCOPE === "project" ? "all" : "session");
+const fallbackView = process.env.PI_ADAM_TODO_VIEW || "todos";
 let viewState = readViewState(statePath, fallbackView);
 let view = viewState.view;
 const intervalMs = Number(process.env.PI_ADAM_TODO_INTERVAL_MS || 700);
@@ -35,7 +35,7 @@ let visibleRows = new Map();
 
 function loadItems() {
 	if (view === "ideas") return listIdeas(cwd);
-	return listTodos(cwd, { scope: view === "all" ? "project" : "session", sessionId }).sort((a, b) => {
+	return listTodos(cwd, { sessionId }).sort((a, b) => {
 		const rank = { in_progress: 0, outstanding: 1, done: 2 };
 		return rank[todoState(a)] - rank[todoState(b)] || a.createdAt.localeCompare(b.createdAt);
 	});
@@ -158,7 +158,7 @@ function render() {
 
 	const lines = [];
 	const tab = (name, key) => view === key ? `${ansi.bold}${ansi.cyan}${name}${ansi.reset}` : `${ansi.dim}${name}${ansi.reset}`;
-	const tabs = ` ${tab("SESSION", "session")} ${ansi.dim}|${ansi.reset} ${tab("ALL", "all")} ${ansi.dim}|${ansi.reset} ${tab("IDEAS", "ideas")}`;
+	const tabs = ` ${tab("TODOS", "todos")} ${ansi.dim}|${ansi.reset} ${tab("IDEAS", "ideas")}`;
 	if (view === "ideas") {
 		lines.push(`${tabs} ${ansi.bold}${total}${ansi.reset}`);
 	} else {
@@ -170,7 +170,7 @@ function render() {
 
 	visibleRows = new Map();
 	if (items.length === 0) {
-		lines.push(`${ansi.dim}${fit(view === "ideas" ? " No ideas." : ` No ${view} todos.`, width)}${ansi.reset}`);
+		lines.push(`${ansi.dim}${fit(view === "ideas" ? " No ideas." : " No todos.", width)}${ansi.reset}`);
 	} else {
 		for (const item of shown) {
 			const terminalRow = lines.length + 1;
@@ -189,8 +189,8 @@ function render() {
 	while (lines.length < height - 2) lines.push("");
 	const position = selectedIndex >= 0 ? `${selectedIndex + 1}/${total}` : "0/0";
 	const help = view === "ideas"
-		? ` ↑↓/jk select · d details · p promote · x dismiss · i back · tab views · q close · ${position}`
-		: ` ↑↓/jk select · space cycle · d details · i ideas · tab views · c clear · q close · ${position}`;
+		? ` ↑↓/jk select · d details · p promote · x dismiss · i todos · tab views · q close · ${position}`
+		: ` ↑↓/jk select · space cycle · d details · f defer · i ideas · c clear · q close · ${position}`;
 	lines.push(`${ansi.dim}${fit(help, width)}${ansi.reset}`);
 	if (confirmingDismissId) {
 		const idea = items.find((item) => item.id === confirmingDismissId);
@@ -244,11 +244,8 @@ function cycleSelected(id = selectedId) {
 }
 
 function selectView(nextView) {
-	const next = BOARD_VIEWS.includes(nextView) ? nextView : "session";
-	viewState = {
-		view: next,
-		lastTodoView: next === "ideas" ? viewState.lastTodoView : next,
-	};
+	const next = BOARD_VIEWS.includes(nextView) ? nextView : "todos";
+	viewState = { view: next };
 	view = next;
 	selectedId = undefined;
 	expandedId = undefined;
@@ -269,7 +266,7 @@ function cycleView() {
 }
 
 function toggleIdeas() {
-	selectView(view === "ideas" ? viewState.lastTodoView : "ideas");
+	selectView(view === "ideas" ? "todos" : "ideas");
 }
 
 function promoteSelected() {
@@ -282,6 +279,15 @@ function promoteSelected() {
 	} else {
 		setFlash("Could not promote idea.");
 	}
+	render();
+}
+
+function deferSelected() {
+	if (view !== "todos" || !selectedId) return;
+	const result = deferTodo(cwd, selectedId, sessionId);
+	selectedId = undefined;
+	expandedId = undefined;
+	setFlash(result ? `Deferred to Ideas: ${result.idea.title}` : "Could not defer todo.");
 	render();
 }
 
@@ -313,7 +319,7 @@ function requestClear() {
 }
 
 function confirmClear() {
-	const deleted = clearCompleted(cwd, { scope: view === "all" ? "project" : "session", sessionId });
+	const deleted = clearCompleted(cwd, { sessionId });
 	confirmingClear = false;
 	setFlash(`Cleared ${deleted.length} completed ${view} todo${deleted.length === 1 ? "" : "s"}.`);
 	render();
@@ -329,9 +335,8 @@ function handleMouse(input) {
 		const pressed = match[4] === "M";
 		if (!pressed || button !== 0) continue;
 		if (row === 1) {
-			if (column >= 2 && column <= 8) selectView("session");
-			else if (column >= 12 && column <= 14) selectView("all");
-			else if (column >= 18 && column <= 22) selectView("ideas");
+			if (column >= 2 && column <= 6) selectView("todos");
+			else if (column >= 10 && column <= 14) selectView("ideas");
 			continue;
 		}
 		const id = visibleRows.get(row);
@@ -374,6 +379,7 @@ process.stdin.on("data", (chunk) => {
 	else if (input.includes("\x1b[B") || input === "j") moveSelection(1);
 	else if (input === " " || input === "\r") cycleSelected();
 	else if (input.toLowerCase() === "d") toggleDetails();
+	else if (input.toLowerCase() === "f") deferSelected();
 	else if (input.toLowerCase() === "p") promoteSelected();
 	else if (input.toLowerCase() === "x") requestDismiss();
 	else if (input.toLowerCase() === "c") requestClear();

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { createTodo, sessionTag } from "./todo-store.js";
+import { createTodo, deleteTodo, getTodo, isCompleted, isSessionTodo, listTodos, sessionIdForTodo, sessionTag } from "./todo-store.js";
 
 export function ideasDirectory(cwd) {
 	return join(cwd, ".pi", "ideas");
@@ -105,6 +105,31 @@ export function promoteIdea(cwd, id, sessionId) {
 		try { unlinkSync(todo.path); } catch {}
 		return undefined;
 	}
+}
+
+export function deferTodo(cwd, id, originSessionId) {
+	const todo = getTodo(cwd, id);
+	if (!todo || isCompleted(todo)) return undefined;
+	const idea = createIdea(cwd, {
+		title: todo.title,
+		body: todo.body,
+		originSessionId: originSessionId ?? sessionIdForTodo(todo),
+		origin: "deferred",
+	});
+	const removed = deleteTodo(cwd, id);
+	if (removed) return { todo: removed, idea };
+	deleteIdea(cwd, idea.id);
+	return undefined;
+}
+
+export function migrateLegacyProjectTodos(cwd) {
+	const migrated = [];
+	for (const todo of listTodos(cwd)) {
+		if (isCompleted(todo) || isSessionTodo(todo)) continue;
+		const result = deferTodo(cwd, todo.id);
+		if (result) migrated.push(result);
+	}
+	return migrated;
 }
 
 export function listIdeas(cwd) {

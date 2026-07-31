@@ -4,12 +4,32 @@ import { basename, join } from "node:path";
 
 export const SESSION_TAG_PREFIX = "session:";
 
+export function normalizeTodoId(value) {
+	let id = String(value ?? "").trim();
+	if (id.startsWith("#")) id = id.slice(1);
+	if (id.toUpperCase().startsWith("TODO-")) id = id.slice(5);
+	return id;
+}
+
 export function sessionTag(sessionId) {
 	return `${SESSION_TAG_PREFIX}${sessionId}`;
 }
 
+export function sessionIdForTodo(todo) {
+	const tag = todo.tags.find((value) => value.startsWith(SESSION_TAG_PREFIX));
+	return tag?.slice(SESSION_TAG_PREFIX.length);
+}
+
+export function isSessionTodo(todo) {
+	return sessionIdForTodo(todo) !== undefined;
+}
+
 export function todosDirectory(cwd) {
 	return join(cwd, ".pi", "todos");
+}
+
+export function todoPath(cwd, id) {
+	return join(todosDirectory(cwd), `${normalizeTodoId(id)}.md`);
 }
 
 export function isCompleted(todo) {
@@ -47,8 +67,8 @@ export function readTodo(path) {
 
 export function writeTodo(todo) {
 	const metadata = { ...todo.metadata };
-	const tags = Array.isArray(metadata.tags) ? metadata.tags.map(String) : [];
-	metadata.tags = tags;
+	metadata.tags = Array.isArray(metadata.tags) ? metadata.tags.map(String) : [];
+	if (metadata.status === "closed" || metadata.status === "done") delete metadata.assigned_to_session;
 	const content = `${JSON.stringify(metadata, null, 2)}\n\n${todo.body ?? ""}`;
 	const temporary = `${todo.path}.tmp-${process.pid}-${Date.now()}`;
 	writeFileSync(temporary, content, "utf8");
@@ -73,16 +93,15 @@ export function createTodo(cwd, options) {
 		id,
 		title: options.title,
 		tags: options.tags ?? [],
-		status: "open",
+		status: options.status ?? "open",
 		created_at: new Date().toISOString(),
+		...(options.assignedToSession ? { assigned_to_session: options.assignedToSession } : {}),
 	};
 	writeTodo({ path, metadata, body: options.body ?? "" });
 	return readTodo(path);
 }
 
 export function listTodos(cwd, options = {}) {
-	const scope = options.scope ?? "project";
-	const wantedSessionTag = options.sessionId ? sessionTag(options.sessionId) : undefined;
 	let names = [];
 	try {
 		const directory = todosDirectory(cwd);
@@ -91,12 +110,66 @@ export function listTodos(cwd, options = {}) {
 	} catch {
 		return [];
 	}
-
+	const wantedTag = options.sessionId ? sessionTag(options.sessionId) : undefined;
 	return names
 		.map((name) => readTodo(join(todosDirectory(cwd), name)))
 		.filter(Boolean)
-		.filter((todo) => scope === "project" || (wantedSessionTag !== undefined && todo.tags.includes(wantedSessionTag)))
+		.filter((todo) => wantedTag === undefined || todo.tags.includes(wantedTag))
 		.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+}
+
+export function getTodo(cwd, id) {
+	return readTodo(todoPath(cwd, id));
+}
+
+export function updateTodo(cwd, id, changes) {
+	const todo = getTodo(cwd, id);
+	if (!todo) return undefined;
+	const metadata = { ...todo.metadata };
+	if (changes.title !== undefined) metadata.title = changes.title;
+	if (changes.status !== undefined) metadata.status = changes.status;
+	if (changes.tags !== undefined) metadata.tags = changes.tags;
+	if (changes.assignedToSession !== undefined) {
+		if (changes.assignedToSession) metadata.assigned_to_session = changes.assignedToSession;
+		else delete metadata.assigned_to_session;
+	}
+	writeTodo({ ...todo, metadata, body: changes.body === undefined ? todo.body : changes.body });
+	return readTodo(todo.path);
+}
+
+export function appendTodo(cwd, id, body) {
+	const todo = getTodo(cwd, id);
+	if (!todo) return undefined;
+	const addition = String(body ?? "").trim();
+	if (!addition) return todo;
+	const existing = todo.body.replace(/\s+$/, "");
+	writeTodo({ ...todo, body: existing ? `${existing}\n\n${addition}\n` : `${addition}\n` });
+	return readTodo(todo.path);
+}
+
+export function deleteTodo(cwd, id) {
+	const todo = getTodo(cwd, id);
+	if (!todo) return undefined;
+	try {
+		unlinkSync(todo.path);
+		return todo;
+	} catch {
+		return undefined;
+	}
+}
+
+export function claimTodo(cwd, id, sessionId, force = false) {
+	const todo = getTodo(cwd, id);
+	if (!todo || isCompleted(todo)) return undefined;
+	if (todo.assignedToSession && todo.assignedToSession !== sessionId && !force) return { conflict: todo.assignedToSession };
+	return updateTodo(cwd, id, { assignedToSession: sessionId });
+}
+
+export function releaseTodo(cwd, id, sessionId, force = false) {
+	const todo = getTodo(cwd, id);
+	if (!todo) return undefined;
+	if (todo.assignedToSession && todo.assignedToSession !== sessionId && !force) return { conflict: todo.assignedToSession };
+	return updateTodo(cwd, id, { assignedToSession: "" });
 }
 
 export function cycleTodo(todo, sessionId) {
