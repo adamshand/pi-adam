@@ -49,44 +49,22 @@ function createHarness(sessionName?: string) {
 	return { calls, handlers };
 }
 
-test("a Pi /name renames the Herdr tab and becomes the secondary agent label", async () => {
+test("a Pi /name renames the Herdr tab", async () => {
 	const { calls, handlers } = createHarness();
 	await handlers.get("session_info_changed")?.({ name: "bugs" }, { cwd: "/src/haume-made.git" });
 
 	assert.deepEqual(calls, [
 		{ command: "herdr", args: ["tab", "rename", "w1:t3", "bugs"] },
-		{
-			command: "herdr",
-			args: [
-				"pane", "report-metadata", "w1:p2",
-				"--source", "pi-adam.session-name",
-				"--agent", "pi",
-				"--applies-to-source", "herdr:pi",
-				"--clear-title",
-				"--display-agent", "bugs",
-			],
-		},
 	]);
 });
 
-test("clearing /name restores the numeric tab label and clears agent metadata", async () => {
+test("clearing /name restores the numeric tab label", async () => {
 	const { calls, handlers } = createHarness();
 	await handlers.get("session_info_changed")?.({ name: undefined }, { cwd: "/src/haume-made.git" });
 
 	assert.deepEqual(calls, [
 		{ command: "herdr", args: ["tab", "get", "w1:t3"] },
 		{ command: "herdr", args: ["tab", "rename", "w1:t3", "3"] },
-		{
-			command: "herdr",
-			args: [
-				"pane", "report-metadata", "w1:p2",
-				"--source", "pi-adam.session-name",
-				"--agent", "pi",
-				"--applies-to-source", "herdr:pi",
-				"--clear-title",
-				"--clear-display-agent",
-			],
-		},
 	]);
 });
 
@@ -95,7 +73,7 @@ test("a named session is synchronized when Pi starts or resumes it", async () =>
 	await handlers.get("session_start")?.({ reason: "startup" }, { cwd: "/src/haume-made.git" });
 
 	assert.equal(calls.some(({ args }) => args.join(" ") === "tab rename w1:t3 release"), true);
-	assert.equal(calls.some(({ args }) => args.includes("--display-agent") && args.includes("release")), true);
+	assert.equal(calls.some(({ args }) => args.includes("--display-agent")), false);
 });
 
 test("an unnamed initial session leaves manual Herdr labels alone", async () => {

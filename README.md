@@ -18,23 +18,23 @@ Personal pi quality-of-life extension.
 
 ## Herdr session names
 
-When Pi runs inside Herdr, `/name bugs` renames the current tab and reports `bugs` as the visible agent label. This package expects the following Herdr sidebar layout in `~/.config/herdr/config.toml`:
+When Pi runs inside Herdr, `/name bugs` renames the current tab. Show that tab name by itself on the second agent-panel line with this layout in `~/.config/herdr/config.toml`:
 
 ```toml
 [ui.sidebar.agents]
-rows = [["state_icon", "workspace"], ["agent"]]
+rows = [["state_icon", "workspace"], ["tab"]]
 ```
 
-Reload Herdr configuration with `herdr server reload-config` after changing it. Clearing the Pi session name restores the tab's numeric label and the normal `pi` agent label.
+Reload Herdr configuration with `herdr server reload-config` after changing it. Clearing the Pi session name restores the tab's numeric label.
 
 ## Todos and Ideas
 
-The ledger deliberately has only two kinds of work:
+The ledger stores durable Work Items of two kinds:
 
-- **Todo** — an active commitment owned by the current Pi session.
+- **Todo** — a commitment owned by one Pi session, with status `ready`, `in_progress`, or `done`.
 - **Idea** — a project-wide possibility, follow-up, or future commitment retained for later.
 
-Promoting an Idea turns it into a Todo in the current session. Deferring an unfinished Todo turns it back into an Idea. Ideas can also be dismissed; completed Todos can be cleared. There are no project-scoped Todos or scope tags in the user-facing model.
+Every Work Item remembers the Pi session where it was first captured. Promoting an Idea assigns it to the current session as a ready Todo; deferring an unfinished Todo removes its owner and turns it back into an Idea. Both transitions preserve its ID, origin, structured intent, checklist, progress, and timestamps. Ideas can also be dismissed; done Todos can be cleared.
 
 Capture work directly from Pi:
 
@@ -44,9 +44,9 @@ Capture work directly from Pi:
 /todos
 ```
 
-Omitting a title from `/todo` or `/idea` opens an input prompt. The agent-facing `todo` and `idea` tools use the same model. Todos live under `.pi/todos`; Ideas live under `.pi/ideas`.
+Omitting a title from `/todo` or `/idea` opens an input prompt. The agent-facing `todo` tool exposes explicit `start`, `complete`, and `reopen` actions and structured intent, progress, and nested checklist fields. Work Items are pretty-printed JSON records under `.pi/work-items`.
 
-The extension automatically migrates unfinished legacy project-tagged or unscoped Todos into Ideas. Existing session-tagged Todos remain with their sessions.
+The extension automatically migrates older Markdown Work Items and legacy `.pi/todos` and `.pi/ideas` records. Session ownership becomes first-class metadata, former assignment becomes `in_progress`, and unfinished project-tagged or unscoped Todos become Ideas.
 
 ## Herdr board
 
@@ -59,10 +59,10 @@ herdr plugin link "$PWD/herdr/todos"
 The stable plugin ID remains `pi-adam.todos`. The board opens automatically at roughly one-third of the tab width while the current session has unfinished Todos. Ideas never open it automatically. The board has two views:
 
 ```text
-TODOS | IDEAS
+Todos | Ideas
 ```
 
-Use `Tab`, `i`, or the clickable labels to switch views. The Pi command controls the pane:
+Use `Tab` or the clickable labels to switch views. The Pi command controls the pane:
 
 ```text
 /todos                  # open the board
@@ -77,13 +77,24 @@ Use `Tab`, `i`, or the clickable labels to switch views. The Pi command controls
 
 `Alt+T` toggles the board while the Pi pane is focused.
 
-In **TODOS**, select with `↑`/`↓` or `j`/`k` and press Space to cycle:
+The header bar is segmented by state: green for done, amber for in progress, and grey for ready. Titles wrap instead of truncating.
 
-```text
-○ outstanding → ◐ in progress → ✓ done → ○ outstanding
-```
+Mouse controls are deliberately direct: single-click selects, double-click opens or closes focused detail, clicking `Todos` or `Ideas` changes view, clicking a Todo icon cycles its state, and the wheel scrolls focused detail.
 
-Press `f` to defer the selected unfinished Todo to Ideas. In **IDEAS**, press `p` to promote the selected Idea into the current session or `x` to dismiss it with confirmation. Press `d` to expand context and checklist details, `c` to clear completed Todos, and `q` to close the pane.
+Keyboard controls are limited to:
+
+- `↑`/`↓` — select an item; scroll focused detail
+- `←`/`→` — move a Todo one bounded state step: `ready ↔ in progress ↔ done`
+- Enter — open or close focused detail
+- `Esc` — close focused detail or help
+- `?` — show or hide the controls reference
+- `Tab` — toggle views
+- `k` — toggle Todo/Idea kind and follow the item into its new view
+- `Delete` — delete either kind after confirmation
+- `c` — clear all done Todos after confirmation
+- `q` — close the pane
+
+The footer stays minimal: `[?] help  [alt-t] show/hide`. For deletion and clearing, `y` confirms and any other key cancels. `Alt+T` opens the board from Pi and hides it from the board pane. `Alt+Shift+Tab` toggles Codex Fast mode.
 
 To open the plugin pane manually from a Pi pane:
 
@@ -111,13 +122,12 @@ Do not pass `--cwd`: Herdr runs the command from the plugin root, where `board.j
 - `features/codex-image.ts` — Codex-hosted image generation and file saving
 - `features/codex-image-utils.ts` — image payload and SSE parsing helpers
 - `features/codex-usage.ts` — read-only Codex usage and banked-reset API integration
-- `features/herdr-session-name.ts` — Pi `/name` synchronization with Herdr tabs and agent titles
+- `features/herdr-session-name.ts` — Pi `/name` synchronization with Herdr tab titles
 - `features/todos.ts` — canonical Todo/Idea tools, commands, guidance, and legacy migration
 - `features/herdr-todos.ts` — Herdr board lifecycle, visibility, metadata, and `/todos`
 - `features/mru.ts` — slash-command recency and editor integration
 - `herdr/todos/board.js` — interactive Herdr board
-- `herdr/todos/todo-store.js` — canonical Todo persistence and transitions
-- `herdr/todos/idea-store.js` — canonical Idea persistence, promotion, and deferral
+- `herdr/todos/work-item-store.js` — unified persistence, lifecycle transitions, provenance, and legacy migration
 - `herdr/todos/view-state.js` — session-local board view state
 - `herdr/todos/herdr-plugin.toml` — Herdr plugin manifest
 

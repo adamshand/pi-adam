@@ -11,9 +11,6 @@ type TabGetResponse = {
 	result?: { tab?: { number?: number } };
 };
 
-const METADATA_SOURCE = "pi-adam.session-name";
-const PI_AGENT_SOURCE = "herdr:pi";
-
 function parseJson<T>(text: string): T | undefined {
 	try {
 		return JSON.parse(text) as T;
@@ -26,9 +23,8 @@ export function registerHerdrSessionNameFeature(
 	pi: ExtensionAPI,
 	environment: HerdrEnvironment = process.env,
 ): void {
-	const paneId = environment.HERDR_PANE_ID;
 	const tabId = environment.HERDR_TAB_ID;
-	if (environment.HERDR_ENV !== "1" || !paneId || !tabId) return;
+	if (environment.HERDR_ENV !== "1" || !tabId) return;
 
 	const runHerdr = async (args: string[]): Promise<HerdrResult> => {
 		try {
@@ -39,42 +35,16 @@ export function registerHerdrSessionNameFeature(
 		}
 	};
 
-	const reportName = async (name: string): Promise<void> => {
-		await runHerdr([
-			"pane", "report-metadata", paneId,
-			"--source", METADATA_SOURCE,
-			"--agent", "pi",
-			"--applies-to-source", PI_AGENT_SOURCE,
-			// With ui.sidebar.agents configured as workspace/agent rows, this puts
-			// the Pi session name beneath the workspace without duplicating the tab.
-			"--clear-title",
-			"--display-agent", name,
-		]);
-	};
-
-	const clearName = async (): Promise<void> => {
-		await runHerdr([
-			"pane", "report-metadata", paneId,
-			"--source", METADATA_SOURCE,
-			"--agent", "pi",
-			"--applies-to-source", PI_AGENT_SOURCE,
-			"--clear-title",
-			"--clear-display-agent",
-		]);
-	};
-
 	const syncName = async (rawName: string | undefined): Promise<void> => {
 		const name = rawName?.trim();
 		if (name) {
 			await runHerdr(["tab", "rename", tabId, name]);
-			await reportName(name);
 			return;
 		}
 
 		const tab = await runHerdr(["tab", "get", tabId]);
 		const tabNumber = tab.ok ? parseJson<TabGetResponse>(tab.stdout)?.result?.tab?.number : undefined;
 		if (tabNumber !== undefined) await runHerdr(["tab", "rename", tabId, String(tabNumber)]);
-		await clearName();
 	};
 
 	let pending = Promise.resolve();

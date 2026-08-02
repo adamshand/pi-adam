@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { registerHerdrTodosFeature } from "./herdr-todos.ts";
-import { listTodos, sessionTag } from "../herdr/todos/todo-store.js";
+import { createTodo, listTodos } from "../herdr/todos/work-item-store.js";
 
 function restoreEnv(previous: Record<string, string | undefined>) {
 	for (const [name, value] of Object.entries(previous)) {
@@ -44,10 +44,8 @@ test("current-session Todos automatically open the two-view board", async () => 
 	process.env.HERDR_PANE_ID = "workspace:source";
 	process.env.HERDR_WORKSPACE_ID = "workspace";
 	const cwd = mkdtempSync(join(tmpdir(), "pi-adam-herdr-controller-"));
-	const directory = join(cwd, ".pi", "todos");
-	mkdirSync(directory, { recursive: true });
-	writeFileSync(join(directory, "current.md"), `${JSON.stringify({ id: "current", title: "Current work", status: "open", tags: [sessionTag("session-one")], created_at: "current" }, null, 2)}\n\n`);
-	writeFileSync(join(directory, "other.md"), `${JSON.stringify({ id: "other", title: "Other work", status: "open", tags: [sessionTag("session-two")], created_at: "other" }, null, 2)}\n\n`);
+	createTodo(cwd, { id: "current", title: "Current work", ownerSessionId: "session-one", createdInSessionId: "session-one" });
+	createTodo(cwd, { id: "other", title: "Other work", ownerSessionId: "session-two", createdInSessionId: "session-two" });
 	const handlers = new Map<string, (...args: any[]) => any>();
 	const commands = new Map<string, any>();
 	const executions: string[][] = [];
@@ -73,6 +71,7 @@ test("current-session Todos automatically open the two-view board", async () => 
 		await handlers.get("session_start")?.({}, ctx);
 		const openArgs = executions.find((args) => args[0] === "plugin" && args[1] === "pane" && args[2] === "open");
 		assert.ok(openArgs?.includes("PI_ADAM_TODO_VIEW=todos"));
+		assert.ok(executions.some((args) => args.join(" ") === "pane rename workspace:board Todo · session-"));
 		await commands.get("todos").handler("view ideas", ctx);
 		await commands.get("todos").handler("status", ctx);
 		assert.ok(notifications.some((message) => message.includes("1 active") && message.includes("view ideas")));
@@ -89,10 +88,8 @@ test("/todos clear removes completed Todos only from the current session", async
 	const previous = { HERDR_ENV: process.env.HERDR_ENV };
 	process.env.HERDR_ENV = "1";
 	const cwd = mkdtempSync(join(tmpdir(), "pi-adam-herdr-clear-"));
-	const directory = join(cwd, ".pi", "todos");
-	mkdirSync(directory, { recursive: true });
-	const add = (id: string, sessionId: string, status: string) => writeFileSync(join(directory, `${id}.md`), `${JSON.stringify({ id, title: id, status, tags: [sessionTag(sessionId)], created_at: id }, null, 2)}\n\n`);
-	add("current-done", "session-one", "closed");
+	const add = (id: string, ownerSessionId: string, status: string) => createTodo(cwd, { id, title: id, status, ownerSessionId, createdInSessionId: ownerSessionId });
+	add("current-done", "session-one", "completed");
 	add("current-open", "session-one", "open");
 	add("other-done", "session-two", "closed");
 	const handlers = new Map<string, (...args: any[]) => any>();

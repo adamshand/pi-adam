@@ -1,12 +1,12 @@
 id = "pi-adam.todos"
-name = "Pi Todo Board"
-version = "0.3.0"
+name = "Todo Board"
+version = "0.6.2"
 min_herdr_version = "0.7.5"
-description = "Current-session Todos and project Ideas board for pi-adam"
+description = "Session-owned Todos and project-wide Ideas board for pi-adam"
 platforms = ["linux", "macos"]
 
 [[panes]]
 id = "board"
-title = "Pi Todos"
+title = "Todo"
 placement = "split"
 command = ["node", "board.js"]

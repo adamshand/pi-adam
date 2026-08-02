@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readViewState, writeViewState } from "../herdr/todos/view-state.js";
-import { clearCompleted, isCompleted, listTodos } from "../herdr/todos/todo-store.js";
+import { clearCompleted, isCompleted, listTodos, migrateLegacyWorkItems } from "../herdr/todos/work-item-store.js";
 
 type BoardView = "todos" | "ideas";
 type Visibility = "auto" | "shown" | "hidden";
@@ -11,7 +11,7 @@ type Visibility = "auto" | "shown" | "hidden";
 type TodoRecord = {
 	id: string;
 	status: string;
-	assignedToSession?: string;
+	updatedAt: string;
 };
 
 type TodoSnapshot = {
@@ -59,7 +59,7 @@ function parseJson<T>(text: string): T | undefined {
 }
 
 function boardLabel(sessionId: string): string {
-	return `Pi Todos · ${sessionId.slice(0, 8)}`;
+	return `Todo · ${sessionId.slice(0, 8)}`;
 }
 
 function todoSnapshot(cwd: string, sessionId: string): TodoSnapshot {
@@ -70,7 +70,7 @@ function todoSnapshot(cwd: string, sessionId: string): TodoSnapshot {
 		done,
 		active: todos.length - done,
 		signature: todos
-			.map((todo) => `${todo.id}:${todo.status}:${todo.assignedToSession ?? ""}`)
+			.map((todo) => `${todo.id}:${todo.status}:${todo.updatedAt}`)
 			.sort()
 			.join("|"),
 	};
@@ -216,6 +216,7 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
+		migrateLegacyWorkItems(ctx.cwd);
 		currentSessionId = ctx.sessionManager.getSessionId();
 		const projectKey = createHash("sha256").update(ctx.cwd).digest("hex").slice(0, 12);
 		viewStatePath = join(tmpdir(), "pi-adam-herdr-todos", projectKey, `${currentSessionId}.view`);

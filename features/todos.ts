@@ -2,120 +2,129 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { createIdea, deferTodo, deleteIdea, listIdeas, migrateLegacyProjectTodos, promoteIdea, updateIdea } from "../herdr/todos/idea-store.js";
-import { appendTodo, claimTodo, createTodo, deleteTodo, getTodo, isCompleted, listTodos, normalizeTodoId, releaseTodo, sessionTag, todoPath, updateTodo } from "../herdr/todos/todo-store.js";
+import {
+	completeTodo,
+	createIdea,
+	createTodo,
+	deferTodo,
+	deleteIdea,
+	deleteWorkItem,
+	getWorkItem,
+	isCompleted,
+	listIdeas,
+	listTodos,
+	migrateLegacyWorkItems,
+	normalizeTodoStatus,
+	normalizeWorkItemId,
+	promoteIdea,
+	reopenTodo,
+	setTodoStatus,
+	startTodo,
+	updateWorkItem,
+	workItemPath,
+} from "../herdr/todos/work-item-store.js";
 
-const TODO_ID_PREFIX = "TODO-";
-const SESSION_TAG_PREFIX = "session:";
-
-function displayTodoId(id: string): string {
-	return `${TODO_ID_PREFIX}${normalizeTodoId(id)}`;
+function displayId(item: { id: string; kind: string }): string {
+	return `${item.kind === "idea" ? "IDEA" : "TODO"}-${normalizeWorkItemId(item.id)}`;
 }
 
-function visibleTags(tags: unknown, sessionId: string): string[] {
-	const values = Array.isArray(tags) ? tags.filter((tag): tag is string => typeof tag === "string") : [];
-	return [...values.filter((tag) => tag !== "project" && !tag.startsWith(SESSION_TAG_PREFIX)), sessionTag(sessionId)];
-}
-
-function serializeTodo(todo: any) {
+function serializeItem(item: any) {
 	return {
-		id: displayTodoId(todo.id),
-		title: todo.title,
-		tags: todo.tags.filter((tag: string) => !tag.startsWith(SESSION_TAG_PREFIX)),
-		status: todo.status,
-		created_at: todo.createdAt,
-		assigned_to_session: todo.assignedToSession,
-		body: todo.body,
+		id: displayId(item),
+		kind: item.kind,
+		title: item.title,
+		intent: item.intent || undefined,
+		progress: item.progress || undefined,
+		checklist: item.checklist.length > 0 ? item.checklist : undefined,
+		...(item.kind === "todo" ? { status: item.status, owner_session_id: item.ownerSessionId } : {}),
+		created_in_session_id: item.createdInSessionId,
+		created_at: item.createdAt,
+		updated_at: item.updatedAt,
 	};
 }
 
 function sessionTodo(cwd: string, id: string, sessionId: string) {
-	const todo = getTodo(cwd, id);
-	return todo?.tags.includes(sessionTag(sessionId)) ? todo : undefined;
+	const item = getWorkItem(cwd, id);
+	return item?.kind === "todo" && item.ownerSessionId === sessionId ? item : undefined;
 }
 
 export function registerTodosFeature(pi: ExtensionAPI): void {
+	const checklistLeaf = Type.Object({
+		text: Type.String({ description: "Concrete checklist outcome" }),
+		done: Type.Optional(Type.Boolean()),
+	});
+	const checklistItem = Type.Object({
+		text: Type.String({ description: "Concrete checklist outcome or group" }),
+		done: Type.Optional(Type.Boolean()),
+		items: Type.Optional(Type.Array(checklistLeaf, { description: "Optional nested checklist outcomes" })),
+	});
+
 	pi.on("before_agent_start", (event) => ({
-		systemPrompt: `${event.systemPrompt}\n\nTodo discipline:\n- Treat todos as the active commitments of this Pi session, not a transcript of every mechanical step.\n- Use the idea tool for project-wide possibilities, follow-ups, or future commitments that are not active in this session.\n- For non-trivial committed work, normally maintain 3–7 outcome-level todos rather than one umbrella ticket or many tiny implementation tickets.\n- Give each todo or idea an independently understandable title. Keep its body concise: why it matters, key constraints, acceptance criteria, and only tightly related checklist steps.\n- Promote an idea when accepting it into the current session; defer an unfinished todo when it should return to Ideas.\n- Before settling, reconcile todos and ideas against the conversation so no promised outcome or explicitly captured future possibility is forgotten and statuses remain accurate.`,
+		systemPrompt: `${event.systemPrompt}\n\nTodo discipline:\n- Treat Todos as active commitments owned by the current Pi session, not a transcript of every mechanical step.\n- Use Ideas for project-wide possibilities, follow-ups, or future commitments that are not active in this session.\n- For non-trivial committed work, normally maintain 3–7 outcome-level Todos rather than one umbrella item or many tiny implementation items.\n- Record concise intent, current progress, and outcome-oriented checklist items when they improve clarity.\n- Use start, complete, and reopen to maintain the ready → in progress → done lifecycle.\n- Promote an Idea when accepting it into the current session; defer an unfinished Todo when it should return to Ideas.\n- Before settling, reconcile Todos and Ideas against the conversation so intent, progress, and status remain accurate.`,
 	}));
 
 	pi.on("session_start", (_event, ctx) => {
-		const migrated = migrateLegacyProjectTodos(ctx.cwd);
+		const migrated = migrateLegacyWorkItems(ctx.cwd);
 		if (migrated.length > 0 && ctx.hasUI) {
-			ctx.ui.notify(`pi-adam: moved ${migrated.length} legacy project todo${migrated.length === 1 ? "" : "s"} to Ideas`, "info");
+			ctx.ui.notify(`pi-adam: migrated ${migrated.length} legacy work item${migrated.length === 1 ? "" : "s"}`, "info");
 		}
 	});
 
 	pi.registerTool({
 		name: "todo",
 		label: "Todo",
-		description: "Manage Todos owned by the current Pi session. Actions: list active Todos, list-all including completed Todos, get, create, update, append, delete, claim, release, and defer a Todo back to project Ideas.",
+		description: "Manage structured Todos owned by the current Pi session. Actions: list active Todos, list-all including done Todos, get, create, update, delete, start, complete, reopen, and defer a Todo back to project Ideas.",
 		promptSnippet: "Manage active commitments owned by the current Pi session",
-		promptGuidelines: ["Use todo for active commitments in the current session; use idea for work retained for later."],
+		promptGuidelines: ["Use Todo for active session commitments and Idea for project-wide work retained for later."],
 		parameters: Type.Object({
-			action: StringEnum(["list", "list-all", "get", "create", "update", "append", "delete", "claim", "release", "defer"] as const),
+			action: StringEnum(["list", "list-all", "get", "create", "update", "delete", "start", "complete", "reopen", "defer"] as const),
 			id: Type.Optional(Type.String({ description: "Todo ID (TODO-<hex> or raw ID)" })),
 			title: Type.Optional(Type.String({ description: "Short independently understandable Todo title" })),
-			status: Type.Optional(Type.String({ description: "Todo status" })),
-			tags: Type.Optional(Type.Array(Type.String({ description: "Non-scope Todo tag" }))),
-			body: Type.Optional(Type.String({ description: "Concise context and acceptance criteria; update replaces and append adds" })),
-			force: Type.Optional(Type.Boolean({ description: "Override another assignment" })),
+			intent: Type.Optional(Type.String({ description: "Concise desired outcome and why it matters" })),
+			progress: Type.Optional(Type.String({ description: "Concise current progress or next constraint" })),
+			checklist: Type.Optional(Type.Array(checklistItem, { description: "Outcome-oriented checklist, optionally nested one level" })),
+			status: Type.Optional(StringEnum(["ready", "in_progress", "done"] as const, { description: "Todo status; prefer start, complete, and reopen actions for transitions" })),
 		}),
+		prepareArguments(args) {
+			if (!args || typeof args !== "object") return args;
+			const input = args as { status?: unknown };
+			if (typeof input.status !== "string") return args;
+			return { ...input, status: normalizeTodoStatus(input.status) };
+		},
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const sessionId = ctx.sessionManager.getSessionId();
 			if (params.action === "list" || params.action === "list-all") {
 				const todos = listTodos(ctx.cwd, { sessionId }).filter((todo) => params.action === "list-all" || !isCompleted(todo));
-				return {
-					content: [{ type: "text" as const, text: todos.length ? JSON.stringify(todos.map(serializeTodo), null, 2) : "No todos" }],
-					details: { action: params.action, count: todos.length },
-				};
+				return { content: [{ type: "text" as const, text: todos.length ? JSON.stringify(todos.map(serializeItem), null, 2) : "No todos" }], details: { action: params.action, count: todos.length } };
 			}
 			if (params.action === "create") {
 				const title = params.title?.trim();
 				if (!title) return { content: [{ type: "text" as const, text: "Error: Todo title is required" }], details: { error: "title required" } };
-				const todo = createTodo(ctx.cwd, {
-					title,
-					body: params.body ?? "",
-					status: params.status,
-					tags: visibleTags(params.tags, sessionId),
-				});
-				return { content: [{ type: "text" as const, text: JSON.stringify(serializeTodo(todo), null, 2) }], details: { action: "create", id: displayTodoId(todo.id) } };
+				const todo = createTodo(ctx.cwd, { title, intent: params.intent ?? "", progress: params.progress ?? "", checklist: params.checklist ?? [], status: params.status, ownerSessionId: sessionId, createdInSessionId: sessionId });
+				return { content: [{ type: "text" as const, text: JSON.stringify(serializeItem(todo), null, 2) }], details: { action: "create", id: displayId(todo) } };
 			}
 			if (!params.id) return { content: [{ type: "text" as const, text: "Error: Todo ID is required" }], details: { error: "id required" } };
 			const todo = sessionTodo(ctx.cwd, params.id, sessionId);
-			if (!todo) return { content: [{ type: "text" as const, text: `Todo not found in this session: ${displayTodoId(params.id)}` }], details: { error: "not found" } };
-			if (params.action === "get") {
-				return { content: [{ type: "text" as const, text: JSON.stringify(serializeTodo(todo), null, 2) }], details: { action: "get", id: displayTodoId(todo.id) } };
-			}
-			return withFileMutationQueue(todoPath(ctx.cwd, todo.id), async () => {
-				let result: any;
+			if (!todo) return { content: [{ type: "text" as const, text: `Todo not found in this session: TODO-${normalizeWorkItemId(params.id)}` }], details: { error: "not found" } };
+			if (params.action === "get") return { content: [{ type: "text" as const, text: JSON.stringify(serializeItem(todo), null, 2) }], details: { action: "get", id: displayId(todo) } };
+			return withFileMutationQueue(workItemPath(ctx.cwd, todo.id), async () => {
+				if (params.action === "defer") {
+					const result = deferTodo(ctx.cwd, todo.id, sessionId);
+					return result ? { content: [{ type: "text" as const, text: `Deferred to Ideas: ${result.idea.title}` }], details: { action: "defer", id: displayId(result.idea) } } : { content: [{ type: "text" as const, text: `Could not defer ${displayId(todo)}` }], details: { error: "defer failed" } };
+				}
+				let result;
+				const hasStructuredUpdate = params.title !== undefined || params.intent !== undefined || params.progress !== undefined || params.checklist !== undefined;
 				if (params.action === "update") {
-					result = updateTodo(ctx.cwd, todo.id, {
-						title: params.title,
-						status: params.status,
-						body: params.body,
-						tags: params.tags === undefined ? undefined : visibleTags(params.tags, sessionId),
-					});
-				} else if (params.action === "append") {
-					result = appendTodo(ctx.cwd, todo.id, params.body);
-				} else if (params.action === "delete") {
-					result = deleteTodo(ctx.cwd, todo.id);
-				} else if (params.action === "claim") {
-					result = claimTodo(ctx.cwd, todo.id, sessionId, Boolean(params.force));
-				} else if (params.action === "release") {
-					result = releaseTodo(ctx.cwd, todo.id, sessionId, Boolean(params.force));
-				} else {
-					const deferred = deferTodo(ctx.cwd, todo.id, sessionId);
-					return deferred
-						? { content: [{ type: "text" as const, text: `Deferred to Ideas: ${deferred.idea.title}` }], details: { action: "defer", ideaId: deferred.idea.id } }
-						: { content: [{ type: "text" as const, text: `Could not defer ${displayTodoId(todo.id)}` }], details: { error: "defer failed" } };
+					result = updateWorkItem(ctx.cwd, todo.id, { title: params.title, intent: params.intent, progress: params.progress, checklist: params.checklist });
+					if (result && params.status !== undefined) result = setTodoStatus(ctx.cwd, todo.id, params.status);
+				} else if (params.action === "delete") result = deleteWorkItem(ctx.cwd, todo.id);
+				else {
+					if (hasStructuredUpdate) updateWorkItem(ctx.cwd, todo.id, { title: params.title, intent: params.intent, progress: params.progress, checklist: params.checklist });
+					if (params.action === "start") result = startTodo(ctx.cwd, todo.id);
+					else if (params.action === "complete") result = completeTodo(ctx.cwd, todo.id);
+					else result = reopenTodo(ctx.cwd, todo.id);
 				}
-				if (result && "conflict" in result) {
-					return { content: [{ type: "text" as const, text: `Todo is assigned to session ${result.conflict}` }], details: { error: "assignment conflict" } };
-				}
-				return result
-					? { content: [{ type: "text" as const, text: JSON.stringify(serializeTodo(result), null, 2) }], details: { action: params.action, id: displayTodoId(result.id) } }
-					: { content: [{ type: "text" as const, text: `Could not ${params.action} ${displayTodoId(todo.id)}` }], details: { error: `${params.action} failed` } };
+				return result ? { content: [{ type: "text" as const, text: JSON.stringify(serializeItem(result), null, 2) }], details: { action: params.action, id: displayId(result) } } : { content: [{ type: "text" as const, text: `Could not ${params.action} ${displayId(todo)}` }], details: { error: `${params.action} failed` } };
 			});
 		},
 	});
@@ -125,35 +134,38 @@ export function registerTodosFeature(pi: ExtensionAPI): void {
 		label: "Idea",
 		description: "Manage project-wide possibilities, follow-ups, and future commitments that are not active in the current Pi session",
 		promptSnippet: "Capture project work that should be retained for later rather than activated now",
-		promptGuidelines: ["Use idea for work retained for later; promote it only when accepting it into the current session."],
+		promptGuidelines: ["Promoting an Idea preserves its identity and assigns it to the current session."],
 		parameters: Type.Object({
 			action: StringEnum(["create", "list", "update", "delete", "promote"] as const),
-			id: Type.Optional(Type.String({ description: "Idea ID for update, delete, or promote" })),
+			id: Type.Optional(Type.String({ description: "Idea ID (IDEA-<hex> or raw ID)" })),
 			title: Type.Optional(Type.String({ description: "Short independently understandable Idea title" })),
-			body: Type.Optional(Type.String({ description: "Concise context explaining why the Idea may matter" })),
+			intent: Type.Optional(Type.String({ description: "Concise possibility and why it may matter" })),
+			checklist: Type.Optional(Type.Array(checklistItem, { description: "Optional questions or outcomes to revisit" })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (params.action === "list") {
 				const ideas = listIdeas(ctx.cwd);
-				return { content: [{ type: "text" as const, text: ideas.length ? ideas.map((idea) => `${idea.id}: ${idea.title}`).join("\n") : "No ideas" }], details: { action: "list", count: ideas.length } };
+				return { content: [{ type: "text" as const, text: ideas.length ? JSON.stringify(ideas.map(serializeItem), null, 2) : "No ideas" }], details: { action: "list", count: ideas.length } };
 			}
 			if (params.action === "create") {
 				const title = params.title?.trim();
 				if (!title) return { content: [{ type: "text" as const, text: "Error: Idea title is required" }], details: { error: "title required" } };
-				const idea = createIdea(ctx.cwd, { title, body: params.body?.trim() ?? "", originSessionId: ctx.sessionManager.getSessionId(), origin: "agent" });
-				return { content: [{ type: "text" as const, text: `Captured Idea: ${idea.title}` }], details: { action: "create", id: idea.id } };
+				const idea = createIdea(ctx.cwd, { title, intent: params.intent?.trim() ?? "", checklist: params.checklist ?? [], createdInSessionId: ctx.sessionManager.getSessionId() });
+				return { content: [{ type: "text" as const, text: `Captured Idea: ${idea.title}` }], details: { action: "create", id: displayId(idea) } };
 			}
 			if (!params.id) return { content: [{ type: "text" as const, text: "Error: Idea ID is required" }], details: { error: "id required" } };
+			const item = getWorkItem(ctx.cwd, params.id);
+			if (!item || item.kind !== "idea") return { content: [{ type: "text" as const, text: `Idea not found: ${params.id}` }], details: { error: "not found" } };
 			if (params.action === "update") {
-				const idea = updateIdea(ctx.cwd, params.id, { title: params.title, body: params.body?.trim() });
-				return idea ? { content: [{ type: "text" as const, text: `Updated Idea: ${idea.title}` }], details: { action: "update", id: idea.id } } : { content: [{ type: "text" as const, text: `Idea not found: ${params.id}` }], details: { error: "not found" } };
+				const idea = updateWorkItem(ctx.cwd, item.id, { title: params.title, intent: params.intent?.trim(), checklist: params.checklist });
+				return { content: [{ type: "text" as const, text: `Updated Idea: ${idea.title}` }], details: { action: "update", id: displayId(idea) } };
 			}
 			if (params.action === "promote") {
-				const promoted = promoteIdea(ctx.cwd, params.id, ctx.sessionManager.getSessionId());
-				return promoted ? { content: [{ type: "text" as const, text: `Promoted Idea to Todo: ${promoted.todo.title}` }], details: { action: "promote", id: displayTodoId(promoted.todo.id) } } : { content: [{ type: "text" as const, text: `Idea not found: ${params.id}` }], details: { error: "not found" } };
+				const promoted = promoteIdea(ctx.cwd, item.id, ctx.sessionManager.getSessionId());
+				return { content: [{ type: "text" as const, text: `Promoted Idea to Todo: ${promoted.todo.title}` }], details: { action: "promote", id: displayId(promoted.todo) } };
 			}
-			const idea = deleteIdea(ctx.cwd, params.id);
-			return idea ? { content: [{ type: "text" as const, text: `Deleted Idea: ${idea.title}` }], details: { action: "delete", id: idea.id } } : { content: [{ type: "text" as const, text: `Idea not found: ${params.id}` }], details: { error: "not found" } };
+			const idea = deleteIdea(ctx.cwd, item.id);
+			return { content: [{ type: "text" as const, text: `Deleted Idea: ${idea.title}` }], details: { action: "delete", id: displayId(idea) } };
 		},
 	});
 
@@ -163,11 +175,11 @@ export function registerTodosFeature(pi: ExtensionAPI): void {
 			let title = args.trim();
 			if (!title) {
 				const entered = await ctx.ui.input("Add Todo", "Todo title");
-				if (entered === undefined) return;
+				if (entered === undefined || !entered.trim()) return;
 				title = entered.trim();
-				if (!title) return;
 			}
-			createTodo(ctx.cwd, { title, tags: [sessionTag(ctx.sessionManager.getSessionId())] });
+			const sessionId = ctx.sessionManager.getSessionId();
+			createTodo(ctx.cwd, { title, ownerSessionId: sessionId, createdInSessionId: sessionId });
 			ctx.ui.notify(`Added Todo: ${title}`, "info");
 		},
 	});
@@ -178,11 +190,10 @@ export function registerTodosFeature(pi: ExtensionAPI): void {
 			let title = args.trim();
 			if (!title) {
 				const entered = await ctx.ui.input("Capture Idea", "Idea title");
-				if (entered === undefined) return;
+				if (entered === undefined || !entered.trim()) return;
 				title = entered.trim();
-				if (!title) return;
 			}
-			createIdea(ctx.cwd, { title, originSessionId: ctx.sessionManager.getSessionId(), origin: "user" });
+			createIdea(ctx.cwd, { title, createdInSessionId: ctx.sessionManager.getSessionId() });
 			ctx.ui.notify(`Captured Idea: ${title}`, "info");
 		},
 	});
