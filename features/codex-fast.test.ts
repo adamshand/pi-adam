@@ -2,11 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { applyCodexFastTier, isCodexFastEligible, isCodexFastModel } from "./codex-fast.ts";
+import { applyCodexFastTier, isCodexFastEligible, isCodexFastModel, isCodexModel } from "./codex-fast.ts";
 
 function model(id: string, provider = "openai-codex", api = "openai-codex-responses"): Model<any> {
 	return { id, provider, api } as Model<any>;
 }
+
+test("identifies Codex models independently of Fast support", () => {
+	assert.equal(isCodexModel(model("gpt-5.4-mini")), true);
+	assert.equal(isCodexModel(model("gpt-5.6-sol", "openai")), false);
+	assert.equal(isCodexModel(model("gpt-5.6-sol", "openai-codex", "openai-responses")), false);
+});
 
 test("allows Fast mode only on the supported Codex model and API combinations", () => {
 	assert.equal(isCodexFastModel(model("gpt-5.6-sol")), true);

@@ -24,8 +24,12 @@ export type CodexFastSnapshot = {
 	eligible: boolean;
 };
 
+export function isCodexModel(model: Model<any> | undefined): model is Model<any> {
+	return model?.provider === CODEX_PROVIDER && model.api === CODEX_API;
+}
+
 export function isCodexFastModel(model: Model<any> | undefined): model is Model<any> {
-	return model?.provider === CODEX_PROVIDER && model.api === CODEX_API && FAST_MODEL_IDS.has(model.id);
+	return isCodexModel(model) && FAST_MODEL_IDS.has(model.id);
 }
 
 export function isCodexFastEligible(ctx: ExtensionContext): boolean {

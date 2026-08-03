@@ -1,6 +1,6 @@
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { registerCodexFastFeature } from "./codex-fast.ts";
+import { isCodexModel, registerCodexFastFeature } from "./codex-fast.ts";
 import { registerCodexUsageFeature } from "./codex-usage.ts";
 
 type AssistantUsage = {
@@ -129,6 +129,7 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 					const costStr = cost === 0
 						? theme.fg("dim", "$0.00")
 						: theme.fg("dim", "$") + colorize(palette.primary, cost.toFixed(2));
+					const showCodex = isCodexModel(ctx.model);
 					const codexUsage = getCodexUsage();
 					const colorizeCodexUsage = (used: number | undefined) => {
 						const text = used === undefined ? "?%" : `${Math.round(used)}%`;
@@ -136,7 +137,7 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 						if (used !== undefined && used > 70) return colorize(palette.warning, text);
 						return colorize(palette.primary, text);
 					};
-					const codexStr = codexUsage
+					const codexStr = showCodex && codexUsage
 						? [
 								codexUsage.fiveHourUsed !== undefined
 									? `${theme.fg("dim", "5h ")}${colorizeCodexUsage(codexUsage.fiveHourUsed)}`
@@ -153,11 +154,13 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 					const modelStr = colorize(palette.primary, ctx.model?.id ?? "no-model");
 					const levelStr = styleThinkingLevel(theme, palette, thinkingLevel);
 					const fast = getCodexFast();
-					const fastStr = fast.enabled && fast.eligible
-						? colorize(palette.primary, "fast")
-						: theme.fg("dim", "fast");
+					const fastStr = showCodex
+						? fast.enabled && fast.eligible
+							? colorize(palette.primary, "fast")
+							: theme.fg("dim", "fast")
+						: undefined;
 					const divider = " " + colorize(palette.separator, "•") + " ";
-					const left = [modelStr, levelStr, fastStr].join(divider);
+					const left = [modelStr, levelStr, fastStr].filter((part): part is string => part !== undefined).join(divider);
 					const right = [costStr, contextPct, codexStr].filter(Boolean).join(divider);
 					const rightWidth = visibleWidth(right);
 					const minimumGap = right ? 2 : 0;
@@ -167,7 +170,7 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 
 					let fittedLeft = left;
 					if (visibleWidth(left) > leftBudget) {
-						const suffix = levelStr + divider + fastStr;
+						const suffix = fastStr ? levelStr + divider + fastStr : levelStr;
 						const suffixWidth = visibleWidth(suffix);
 						const modelDividerWidth = visibleWidth(divider);
 						if (leftBudget > suffixWidth + modelDividerWidth) {
@@ -176,7 +179,7 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 						} else if (leftBudget >= suffixWidth) {
 							fittedLeft = suffix;
 						} else {
-							fittedLeft = truncateToWidth(fastStr, leftBudget);
+							fittedLeft = truncateToWidth(fastStr ?? levelStr, leftBudget);
 						}
 					}
 					const pad = " ".repeat(Math.max(minimumGap, width - visibleWidth(fittedLeft) - rightWidth));
