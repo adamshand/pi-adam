@@ -13,19 +13,25 @@ Personal pi quality-of-life extension.
 - `/codex-usage` shows Codex usage, reset times, and available banked resets; `/codex-usage-refresh` refreshes it immediately.
 - Slash-command usage is stored in `state.json` next to this extension.
 - `/pi-adam-mru` shows the recent list; `/pi-adam-mru reset` clears it.
-- Inside Herdr, Pi `/name` values automatically rename the tab and appear beneath the workspace name in the agents panel.
+- Inside Herdr, Pi `/name` values automatically rename the tab and appear in the agents panel.
+- Herdr agent rows can show each Pi pane's Git branch, working-tree changes, and upstream divergence through custom metadata tokens.
 - The work ledger keeps current-session Todos visible in a Herdr pane while retaining project-wide Ideas for later.
 
-## Herdr session names
+## Herdr agent metadata
 
-When Pi runs inside Herdr, `/name bugs` renames the current tab. Show that tab name by itself on the second agent-panel line with this layout in `~/.config/herdr/config.toml`:
+When Pi runs inside Herdr, `/name bugs` renames the current tab. Pi also reports the repository at its session working directory as the custom Agent tokens `$branch` and `$git_status`. The latter renders compact values such as `!3 ?2 ↑1 ↓4`: `!` counts distinct changed tracked files (staged, unstaged, or conflicted), `?` counts untracked files, and the arrows show upstream ahead/behind commits. Zero-value parts disappear, and the whole token disappears for a clean branch synchronized with its upstream.
+
+For example, show the session name with its per-agent Git context using this layout in `~/.config/herdr/config.toml`:
 
 ```toml
 [ui.sidebar.agents]
-rows = [["state_icon", "workspace"], ["tab"]]
+rows = [
+  ["state_icon", "workspace", "tab"],
+  ["$branch", "$git_status"],
+]
 ```
 
-Reload Herdr configuration with `herdr server reload-config` after changing it. Clearing the Pi session name restores the tab's numeric label.
+Git metadata is refreshed when a session starts or settles and every five seconds while it remains open. Outside a Git checkout both values are cleared; on a detached HEAD only `$branch` is cleared, while working-tree counts remain available. Reload Herdr configuration with `herdr server reload-config` after changing it. Clearing the Pi session name restores the tab's numeric label.
 
 ## Todos and Ideas
 
@@ -122,6 +128,7 @@ Do not pass `--cwd`: Herdr runs the command from the plugin root, where `board.j
 - `features/codex-image.ts` — Codex-hosted image generation and file saving
 - `features/codex-image-utils.ts` — image payload and SSE parsing helpers
 - `features/codex-usage.ts` — read-only Codex usage and banked-reset API integration
+- `features/herdr-git-metadata.ts` — per-pane Git branch, working-tree, and upstream status for Herdr Agent tokens
 - `features/herdr-session-name.ts` — Pi `/name` synchronization with Herdr tab titles
 - `features/todos.ts` — canonical Todo/Idea tools, commands, guidance, and legacy migration
 - `features/herdr-todos.ts` — Herdr board lifecycle, visibility, metadata, and `/todos`
