@@ -60,7 +60,15 @@ export function registerTodosFeature(pi: ExtensionAPI): void {
 	});
 
 	pi.on("before_agent_start", (event) => ({
-		systemPrompt: `${event.systemPrompt}\n\nTodo discipline:\n- Treat Todos as active commitments owned by the current Pi session, not a transcript of every mechanical step.\n- Use Ideas for project-wide possibilities, follow-ups, or future commitments that are not active in this session.\n- For non-trivial committed work, normally maintain 3–7 outcome-level Todos rather than one umbrella item or many tiny implementation items.\n- Record concise intent, current progress, and outcome-oriented checklist items when they improve clarity.\n- Use start, complete, and reopen to maintain the ready → in progress → done lifecycle.\n- Promote an Idea when accepting it into the current session; defer an unfinished Todo when it should return to Ideas.\n- Before settling, reconcile Todos and Ideas against the conversation so intent, progress, and status remain accurate.`,
+		systemPrompt: `${event.systemPrompt}
+		Todo discipline:
+		- Todos are session scoped, ideas are project scoped.
+		- Use todos to communicate to Adam what is being worked on so he can help make sure things aren't forgotten.
+		- Use ideas to for work which needs to be investigated, discussed, or implemented outside of this session.
+		- Use start, complete, and reopen to maintain the ready → in progress → done lifecycle.
+		- Promote an Idea when accepting it into the current session; defer an unfinished Todo when it should return to Ideas.
+		- Before settling, reconcile Todos and Ideas against the conversation so intent, progress, and status remain accurate.
+		`,
 	}));
 
 	pi.on("session_start", (_event, ctx) => {
