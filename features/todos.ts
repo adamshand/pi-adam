@@ -63,9 +63,10 @@ export function registerTodosFeature(pi: ExtensionAPI): void {
 		systemPrompt: `${event.systemPrompt}
 		Todo discipline:
 		- Todos are session scoped, ideas are project scoped.
-		- Use todos to communicate to Adam what is being worked on so he can help make sure things aren't forgotten.
-		- Use ideas to for work which needs to be investigated, discussed, or implemented outside of this session.
-		- Use start, complete, and reopen to maintain the ready → in progress → done lifecycle.
+		- For one user request with one cohesive deliverable, work directly and report the result.
+		- Create Todos when the session has multiple distinct commitments, work is explicitly being tracked, or a follow-up must remain visible across turns.
+		- Keep each Todo as a meaningful commitment Adam can monitor, and use start, complete, and reopen to maintain the ready → in progress → done lifecycle.
+		- Capture project work to investigate, discuss, or implement later as Ideas.
 		- Promote an Idea when accepting it into the current session; defer an unfinished Todo when it should return to Ideas.
 		- Before settling, reconcile Todos and Ideas against the conversation so intent, progress, and status remain accurate.
 		`,
@@ -83,7 +84,10 @@ export function registerTodosFeature(pi: ExtensionAPI): void {
 		label: "Todo",
 		description: "Manage structured Todos owned by the current Pi session. Actions: list active Todos, list-all including done Todos, get, create, update, delete, start, complete, reopen, and defer a Todo back to project Ideas.",
 		promptSnippet: "Manage active commitments owned by the current Pi session",
-		promptGuidelines: ["Use Todo for active session commitments and Idea for project-wide work retained for later."],
+		promptGuidelines: [
+			"For one cohesive user request, work directly and report the result.",
+			"Create Todos for multiple distinct session commitments, explicitly tracked work, or follow-ups that must remain visible across turns; use Ideas for project-wide work retained for later.",
+		],
 		parameters: Type.Object({
 			action: StringEnum(["list", "list-all", "get", "create", "update", "delete", "start", "complete", "reopen", "defer"] as const),
 			id: Type.Optional(Type.String({ description: "Todo ID (TODO-<hex> or raw ID)" })),
