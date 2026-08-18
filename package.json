@@ -8,7 +8,10 @@
     "pi-package"
   ],
   "scripts": {
-    "test": "node --test features/*.test.ts herdr/todos/*.test.js"
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "lint": "oxlint",
+    "test": "node --test features/*.test.ts herdr/todos/*.test.js",
+    "typecheck": "tsc"
   },
   "pi": {
     "extensions": [
@@ -23,5 +26,11 @@
   },
   "dependencies": {
     "agent-browser": "0.34.0"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.78.0",
+    "@types/node": "26.2.0",
+    "oxlint": "1.78.0",
+    "typescript": "7.0.2"
   }
 }

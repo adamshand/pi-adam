@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { registerHerdrSessionNameFeature } from "./herdr-session-name.ts";
+import { createTestExtensionApi } from "./test-extension.ts";
 
-type Handler = (event: any, ctx?: any) => unknown;
+type Handler = (
+	event: { name?: string; reason?: string },
+	ctx?: { cwd: string },
+) => void | Promise<void>;
 
 type ExecCall = {
 	command: string;
@@ -39,7 +43,7 @@ function createHarness(sessionName?: string) {
 		},
 	};
 
-	registerHerdrSessionNameFeature(pi as any, {
+	registerHerdrSessionNameFeature(createTestExtensionApi(pi), {
 		HERDR_ENV: "1",
 		HERDR_PANE_ID: "w1:p2",
 		HERDR_TAB_ID: "w1:t3",
@@ -84,10 +88,10 @@ test("an unnamed initial session leaves manual Herdr labels alone", async () => 
 
 test("the feature is inert outside a Herdr pane", () => {
 	const handlers = new Map<string, Handler>();
-	registerHerdrSessionNameFeature({
+	registerHerdrSessionNameFeature(createTestExtensionApi({
 		on(event: string, handler: Handler) {
 			handlers.set(event, handler);
 		},
-	} as any, { HERDR_ENV: "0" });
+	}), { HERDR_ENV: "0" });
 	assert.equal(handlers.size, 0);
 });

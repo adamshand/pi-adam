@@ -7,8 +7,17 @@ import {
 	TURN_STAMP_ENTRY_TYPE,
 	type TurnStampData,
 } from "./turn-stamp.ts";
+import { createTestExtensionApi } from "./test-extension.ts";
 
-type Handler = (event: any, ctx?: any) => unknown;
+type HarnessContext = { mode: "tui" | "print" };
+type Handler = (event: { message?: { role: "assistant" | "user" }; reason?: string }, ctx?: HarnessContext) => object | undefined;
+type StampComponent = { render(width: number): string[]; invalidate(): void };
+type RendererOptions = Record<never, never>;
+type StampRenderer = (
+	entry: { data?: TurnStampData },
+	options: RendererOptions,
+	theme: { fg(color: string, text: string): string },
+) => StampComponent | undefined;
 
 type AppendedEntry = {
 	customType: string;
@@ -18,7 +27,7 @@ type AppendedEntry = {
 function createHarness(now = new Date(2026, 7, 18, 13, 53).getTime()) {
 	const handlers = new Map<string, Handler>();
 	const appended: AppendedEntry[] = [];
-	let renderer: ((entry: { data?: TurnStampData }, options: unknown, theme: any) => any) | undefined;
+	let renderer: StampRenderer | undefined;
 	const pi = {
 		on(event: string, handler: Handler) {
 			handlers.set(event, handler);
@@ -31,7 +40,7 @@ function createHarness(now = new Date(2026, 7, 18, 13, 53).getTime()) {
 		},
 	};
 
-	registerTurnStampFeature(pi as any, () => now);
+	registerTurnStampFeature(createTestExtensionApi(pi), () => now);
 	return { appended, handlers, getRenderer: () => renderer };
 }
 
@@ -93,8 +102,10 @@ test("renders the stamp dimmed, right-aligned, and width-safe", () => {
 		},
 	);
 
+	assert.ok(component);
 	assert.deepEqual(component.render(40), ["              Tue 18 August 2026, 1:53PM"]);
 	assert.equal(renderedColor, "dim");
-	const narrow = component.render(12)[0] as string;
+	const narrow = component.render(12)[0];
+	assert.ok(narrow);
 	assert.equal(stripVTControlCharacters(narrow), "Tue 18 Augus");
 });

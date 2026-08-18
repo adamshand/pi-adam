@@ -1,4 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { Parse } from "typebox/value";
 
 type HerdrEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -7,13 +9,15 @@ type HerdrResult = {
 	stdout: string;
 };
 
-type TabGetResponse = {
-	result?: { tab?: { number?: number } };
-};
+const TabGetResponseSchema = Type.Object({
+	result: Type.Optional(Type.Object({
+		tab: Type.Optional(Type.Object({ number: Type.Optional(Type.Number()) })),
+	})),
+});
 
-function parseJson<T>(text: string): T | undefined {
+function parseTabGetResponse(text: string) {
 	try {
-		return JSON.parse(text) as T;
+		return Parse(TabGetResponseSchema, JSON.parse(text));
 	} catch {
 		return undefined;
 	}
@@ -43,7 +47,7 @@ export function registerHerdrSessionNameFeature(
 		}
 
 		const tab = await runHerdr(["tab", "get", tabId]);
-		const tabNumber = tab.ok ? parseJson<TabGetResponse>(tab.stdout)?.result?.tab?.number : undefined;
+		const tabNumber = tab.ok ? parseTabGetResponse(tab.stdout)?.result?.tab?.number : undefined;
 		if (tabNumber !== undefined) await runHerdr(["tab", "rename", tabId, String(tabNumber)]);
 	};
 

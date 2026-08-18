@@ -22,6 +22,9 @@ let viewState = readViewState(statePath, fallbackView);
 let view = viewState.view;
 const intervalMs = Number(process.env.PI_ADAM_TODO_INTERVAL_MS || 700);
 
+const ESCAPE_CHARACTER = String.fromCodePoint(27);
+const ANSI_SGR_PATTERN = new RegExp(`${ESCAPE_CHARACTER}\\[[0-9;]*m`, "g");
+
 const ansi = {
 	reset: "\x1b[0m",
 	bold: "\x1b[1m",
@@ -61,12 +64,8 @@ function statusIcon(item) {
 	return `${ansi.gray}○${ansi.reset}`;
 }
 
-function visibleLength(text) {
-	return String(text).replace(/\x1b\[[0-9;]*m/g, "").length;
-}
-
 function fit(text, width) {
-	const plain = String(text).replace(/\x1b\[[0-9;]*m/g, "");
+	const plain = String(text).replace(ANSI_SGR_PATTERN, "");
 	if (plain.length <= width) return text;
 	return `${plain.slice(0, Math.max(0, width - 1))}…`;
 }
@@ -413,7 +412,7 @@ function confirmClear() {
 }
 
 function handleMouse(input) {
-	const mouse = /\x1b\[<(\d+);(\d+);(\d+)([mM])/g;
+	const mouse = new RegExp(`${ESCAPE_CHARACTER}\\[<(\\d+);(\\d+);(\\d+)([mM])`, "g");
 	let match;
 	while ((match = mouse.exec(input)) !== null) {
 		const button = Number(match[1]);

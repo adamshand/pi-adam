@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import { Parse } from "typebox/value";
 import {
 	completeTodo,
 	createIdea,
@@ -22,25 +23,71 @@ import {
 	startTodo,
 	updateWorkItem,
 	workItemPath,
+	type ChecklistItem,
+	type WorkItem,
 } from "../herdr/todos/work-item-store.js";
+
+const ChecklistLeafSchema = Type.Object({
+	text: Type.String({ description: "Concrete checklist outcome" }),
+	done: Type.Optional(Type.Boolean()),
+});
+
+const ChecklistItemSchema = Type.Object({
+	text: Type.String({ description: "Concrete checklist outcome or group" }),
+	done: Type.Optional(Type.Boolean()),
+	items: Type.Optional(Type.Array(ChecklistLeafSchema, { description: "Optional nested checklist outcomes" })),
+});
+
+const TodoActionSchema = StringEnum(["list", "list-all", "get", "create", "update", "delete", "start", "complete", "reopen", "defer"] as const);
+const TodoStatusSchema = StringEnum(["ready", "in_progress", "done"] as const, {
+	description: "Todo status; prefer start, complete, and reopen actions for transitions",
+});
+const TodoParameterProperties = {
+	action: TodoActionSchema,
+	id: Type.Optional(Type.String({ description: "Todo ID (TODO-<hex> or raw ID)" })),
+	title: Type.Optional(Type.String({ description: "Short independently understandable Todo title" })),
+	intent: Type.Optional(Type.String({ description: "Concise desired outcome and why it matters" })),
+	progress: Type.Optional(Type.String({ description: "Concise current progress or next constraint" })),
+	checklist: Type.Optional(Type.Array(ChecklistItemSchema, { description: "Outcome-oriented checklist, optionally nested one level" })),
+};
+const TodoParametersSchema = Type.Object({ ...TodoParameterProperties, status: Type.Optional(TodoStatusSchema) });
+const TodoPreparationSchema = Type.Object({ ...TodoParameterProperties, status: Type.Optional(Type.String()) });
+
+type SerializedWorkItem = {
+	id: string;
+	kind: WorkItem["kind"];
+	title: string;
+	intent?: string;
+	progress?: string;
+	checklist?: ChecklistItem[];
+	status?: string;
+	owner_session_id?: string;
+	created_in_session_id?: string;
+	created_at: string;
+	updated_at: string;
+};
 
 function displayId(item: { id: string; kind: string }): string {
 	return `${item.kind === "idea" ? "IDEA" : "TODO"}-${normalizeWorkItemId(item.id)}`;
 }
 
-function serializeItem(item: any) {
-	return {
+function serializeItem(item: WorkItem): SerializedWorkItem {
+	const serialized: SerializedWorkItem = {
 		id: displayId(item),
 		kind: item.kind,
 		title: item.title,
 		intent: item.intent || undefined,
 		progress: item.progress || undefined,
 		checklist: item.checklist.length > 0 ? item.checklist : undefined,
-		...(item.kind === "todo" ? { status: item.status, owner_session_id: item.ownerSessionId } : {}),
 		created_in_session_id: item.createdInSessionId,
 		created_at: item.createdAt,
 		updated_at: item.updatedAt,
 	};
+	if (item.kind === "todo") {
+		serialized.status = item.status;
+		serialized.owner_session_id = item.ownerSessionId;
+	}
+	return serialized;
 }
 
 function sessionTodo(cwd: string, id: string, sessionId: string) {
@@ -49,16 +96,6 @@ function sessionTodo(cwd: string, id: string, sessionId: string) {
 }
 
 export function registerTodosFeature(pi: ExtensionAPI): void {
-	const checklistLeaf = Type.Object({
-		text: Type.String({ description: "Concrete checklist outcome" }),
-		done: Type.Optional(Type.Boolean()),
-	});
-	const checklistItem = Type.Object({
-		text: Type.String({ description: "Concrete checklist outcome or group" }),
-		done: Type.Optional(Type.Boolean()),
-		items: Type.Optional(Type.Array(checklistLeaf, { description: "Optional nested checklist outcomes" })),
-	});
-
 	pi.on("before_agent_start", (event) => ({
 		systemPrompt: `${event.systemPrompt}
 		Todo discipline:
@@ -88,20 +125,13 @@ export function registerTodosFeature(pi: ExtensionAPI): void {
 			"For one cohesive user request, work directly and report the result.",
 			"Create Todos for multiple distinct session commitments, explicitly tracked work, or follow-ups that must remain visible across turns; use Ideas for project-wide work retained for later.",
 		],
-		parameters: Type.Object({
-			action: StringEnum(["list", "list-all", "get", "create", "update", "delete", "start", "complete", "reopen", "defer"] as const),
-			id: Type.Optional(Type.String({ description: "Todo ID (TODO-<hex> or raw ID)" })),
-			title: Type.Optional(Type.String({ description: "Short independently understandable Todo title" })),
-			intent: Type.Optional(Type.String({ description: "Concise desired outcome and why it matters" })),
-			progress: Type.Optional(Type.String({ description: "Concise current progress or next constraint" })),
-			checklist: Type.Optional(Type.Array(checklistItem, { description: "Outcome-oriented checklist, optionally nested one level" })),
-			status: Type.Optional(StringEnum(["ready", "in_progress", "done"] as const, { description: "Todo status; prefer start, complete, and reopen actions for transitions" })),
-		}),
+		parameters: TodoParametersSchema,
 		prepareArguments(args) {
-			if (!args || typeof args !== "object") return args;
-			const input = args as { status?: unknown };
-			if (typeof input.status !== "string") return args;
-			return { ...input, status: normalizeTodoStatus(input.status) };
+			const input = Parse(TodoPreparationSchema, args);
+			return {
+				...input,
+				status: input.status === undefined ? undefined : normalizeTodoStatus(input.status),
+			};
 		},
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const sessionId = ctx.sessionManager.getSessionId();
@@ -152,7 +182,7 @@ export function registerTodosFeature(pi: ExtensionAPI): void {
 			id: Type.Optional(Type.String({ description: "Idea ID (IDEA-<hex> or raw ID)" })),
 			title: Type.Optional(Type.String({ description: "Short independently understandable Idea title" })),
 			intent: Type.Optional(Type.String({ description: "Concise possibility and why it may matter" })),
-			checklist: Type.Optional(Type.Array(checklistItem, { description: "Optional questions or outcomes to revisit" })),
+			checklist: Type.Optional(Type.Array(ChecklistItemSchema, { description: "Optional questions or outcomes to revisit" })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (params.action === "list") {
@@ -170,13 +200,16 @@ export function registerTodosFeature(pi: ExtensionAPI): void {
 			if (!item || item.kind !== "idea") return { content: [{ type: "text" as const, text: `Idea not found: ${params.id}` }], details: { error: "not found" } };
 			if (params.action === "update") {
 				const idea = updateWorkItem(ctx.cwd, item.id, { title: params.title, intent: params.intent?.trim(), checklist: params.checklist });
+				if (!idea) return { content: [{ type: "text" as const, text: `Could not update ${displayId(item)}` }], details: { error: "update failed" } };
 				return { content: [{ type: "text" as const, text: `Updated Idea: ${idea.title}` }], details: { action: "update", id: displayId(idea) } };
 			}
 			if (params.action === "promote") {
 				const promoted = promoteIdea(ctx.cwd, item.id, ctx.sessionManager.getSessionId());
+				if (!promoted) return { content: [{ type: "text" as const, text: `Could not promote ${displayId(item)}` }], details: { error: "promote failed" } };
 				return { content: [{ type: "text" as const, text: `Promoted Idea to Todo: ${promoted.todo.title}` }], details: { action: "promote", id: displayId(promoted.todo) } };
 			}
 			const idea = deleteIdea(ctx.cwd, item.id);
+			if (!idea) return { content: [{ type: "text" as const, text: `Could not delete ${displayId(item)}` }], details: { error: "delete failed" } };
 			return { content: [{ type: "text" as const, text: `Deleted Idea: ${idea.title}` }], details: { action: "delete", id: displayId(idea) } };
 		},
 	});

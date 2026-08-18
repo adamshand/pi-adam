@@ -1,23 +1,34 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type, type Static, type TSchema } from "typebox";
+import { Parse } from "typebox/value";
 
-type RateLimitWindow = {
-	used_percent?: number;
-	reset_at?: number;
-	limit_window_seconds?: number;
-};
+const RateLimitWindowSchema = Type.Object({
+	used_percent: Type.Optional(Type.Number()),
+	reset_at: Type.Optional(Type.Number()),
+	limit_window_seconds: Type.Optional(Type.Number()),
+});
 
-export type RateLimit = {
-	primary_window?: RateLimitWindow | null;
-	secondary_window?: RateLimitWindow | null;
-};
+const RateLimitSchema = Type.Object({
+	primary_window: Type.Optional(Type.Union([RateLimitWindowSchema, Type.Null()])),
+	secondary_window: Type.Optional(Type.Union([RateLimitWindowSchema, Type.Null()])),
+});
 
-type CodexUsageResponse = {
-	rate_limit?: RateLimit;
-};
+const CodexUsageResponseSchema = Type.Object({
+	rate_limit: Type.Optional(RateLimitSchema),
+});
 
-type ResetCreditsResponse = {
-	available_count?: number;
-};
+const ResetCreditsResponseSchema = Type.Object({
+	available_count: Type.Optional(Type.Number()),
+});
+
+const JwtClaimsSchema = Type.Object({
+	"https://api.openai.com/auth": Type.Optional(Type.Object({
+		chatgpt_account_id: Type.Optional(Type.String()),
+	})),
+});
+
+type RateLimitWindow = Static<typeof RateLimitWindowSchema>;
+export type RateLimit = Static<typeof RateLimitSchema>;
 
 export type CodexUsageSnapshot = {
 	fiveHourUsed?: number;
@@ -45,28 +56,31 @@ function getAccountIdFromJwt(accessToken: string): string | undefined {
 	const payloadJson = decodeBase64Url(accessToken.split(".")[1] ?? "");
 	if (!payloadJson) return undefined;
 	try {
-		const payload = JSON.parse(payloadJson) as Record<string, unknown>;
-		const auth = payload[JWT_CLAIM_PATH] as Record<string, unknown> | undefined;
-		return typeof auth?.chatgpt_account_id === "string" ? auth.chatgpt_account_id : undefined;
+		return Parse(JwtClaimsSchema, JSON.parse(payloadJson))[JWT_CLAIM_PATH]?.chatgpt_account_id;
 	} catch {
 		return undefined;
 	}
 }
 
-async function getJson<T>(path: string, accessToken: string, accountId?: string): Promise<T> {
-	const headers: Record<string, string> = {
+async function getJson<Schema extends TSchema>(
+	schema: Schema,
+	path: string,
+	accessToken: string,
+	accountId?: string,
+): Promise<Static<Schema>> {
+	const headers = new Headers({
 		Authorization: `Bearer ${accessToken}`,
 		Accept: "application/json",
 		"User-Agent": "pi-adam",
-	};
-	if (accountId) headers["ChatGPT-Account-Id"] = accountId;
+	});
+	if (accountId) headers.set("ChatGPT-Account-Id", accountId);
 
 	const response = await fetch(`${API_BASE}/${path}`, {
 		headers,
 		signal: AbortSignal.timeout(10_000),
 	});
 	if (!response.ok) throw new Error(`Codex ${path} fetch failed (${response.status})`);
-	return (await response.json()) as T;
+	return Parse(schema, await response.json());
 }
 
 export function snapshotFromRateLimit(rateLimit: RateLimit | undefined): CodexUsageSnapshot {
@@ -77,10 +91,10 @@ export function snapshotFromRateLimit(rateLimit: RateLimit | undefined): CodexUs
 	// OpenAI does not guarantee that primary means 5-hour and secondary means weekly.
 	// Some plans now return only a weekly window in primary_window.
 	const fiveHour = windows.find(
-		(window) => typeof window.limit_window_seconds === "number" && window.limit_window_seconds <= 24 * 60 * 60,
+		(window) => window.limit_window_seconds !== undefined && window.limit_window_seconds <= 24 * 60 * 60,
 	);
 	const weekly = windows.find(
-		(window) => typeof window.limit_window_seconds === "number" && window.limit_window_seconds > 24 * 60 * 60,
+		(window) => window.limit_window_seconds !== undefined && window.limit_window_seconds > 24 * 60 * 60,
 	);
 
 	// Preserve the legacy positional mapping when the API omits window durations.
@@ -88,10 +102,10 @@ export function snapshotFromRateLimit(rateLimit: RateLimit | undefined): CodexUs
 	const fallbackWeekly = weekly ?? (secondary?.limit_window_seconds === undefined ? secondary : undefined);
 
 	return {
-		fiveHourUsed: typeof fallbackFiveHour?.used_percent === "number" ? fallbackFiveHour.used_percent : undefined,
-		weeklyUsed: typeof fallbackWeekly?.used_percent === "number" ? fallbackWeekly.used_percent : undefined,
-		fiveHourResetAt: typeof fallbackFiveHour?.reset_at === "number" ? fallbackFiveHour.reset_at : undefined,
-		weeklyResetAt: typeof fallbackWeekly?.reset_at === "number" ? fallbackWeekly.reset_at : undefined,
+		fiveHourUsed: fallbackFiveHour?.used_percent,
+		weeklyUsed: fallbackWeekly?.used_percent,
+		fiveHourResetAt: fallbackFiveHour?.reset_at,
+		weeklyResetAt: fallbackWeekly?.reset_at,
 	};
 }
 
@@ -100,17 +114,14 @@ async function loadSnapshot(ctx: ExtensionContext): Promise<CodexUsageSnapshot> 
 	if (!accessToken) throw new Error('No Pi auth found for provider "openai-codex". Use /login first.');
 	const accountId = getAccountIdFromJwt(accessToken);
 	const [usageResult, creditsResult] = await Promise.allSettled([
-		getJson<CodexUsageResponse>("usage", accessToken, accountId),
-		getJson<ResetCreditsResponse>("rate-limit-reset-credits", accessToken, accountId),
+		getJson(CodexUsageResponseSchema, "usage", accessToken, accountId),
+		getJson(ResetCreditsResponseSchema, "rate-limit-reset-credits", accessToken, accountId),
 	]);
 	if (usageResult.status === "rejected") throw usageResult.reason;
 
 	return {
 		...snapshotFromRateLimit(usageResult.value.rate_limit),
-		availableResets:
-			creditsResult.status === "fulfilled" && typeof creditsResult.value.available_count === "number"
-				? creditsResult.value.available_count
-				: undefined,
+		availableResets: creditsResult.status === "fulfilled" ? creditsResult.value.available_count : undefined,
 	};
 }
 

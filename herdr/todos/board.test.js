@@ -8,8 +8,11 @@ import { createIdea, createTodo, getWorkItem, listIdeas, listTodos } from "./wor
 
 const boardPath = new URL("./board.js", import.meta.url);
 
+const ESCAPE_CHARACTER = String.fromCodePoint(27);
+const ANSI_SEQUENCE_PATTERN = new RegExp(`${ESCAPE_CHARACTER}\\[[0-9;?]*[A-Za-z]`, "g");
+
 function stripAnsi(text) {
-	return text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+	return text.replace(ANSI_SEQUENCE_PATTERN, "");
 }
 
 function latestRawScreen(output) {
@@ -72,9 +75,9 @@ test("wrapped overview and focused details use the compact canonical footer", as
 	try {
 		await waitFor(() => screen().includes("Deliver a useful outcome"), "board did not render the Todo");
 		assert.match(screen().split(/\r?\n/).filter(Boolean)[0], /^ Todos \| Ideas █+$/);
-		assert.match(rawScreen(), /\x1b\[32m█+/);
-		assert.match(rawScreen(), /\x1b\[33m█+/);
-		assert.match(rawScreen(), /\x1b\[90m█+/);
+		assert.match(rawScreen(), new RegExp(`${ESCAPE_CHARACTER}\\[32m█+`));
+		assert.match(rawScreen(), new RegExp(`${ESCAPE_CHARACTER}\\[33m█+`));
+		assert.match(rawScreen(), new RegExp(`${ESCAPE_CHARACTER}\\[90m█+`));
 		assert.ok(screen().includes("across the") && screen().includes("narrow board width"));
 		assert.ok(screen().includes("[?] help  [alt-t] show/hide"));
 		assert.ok(!screen().includes("refresh") && !screen().includes("↑↓") && !screen().includes("[k]kind"));

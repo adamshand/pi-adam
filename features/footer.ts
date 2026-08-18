@@ -3,18 +3,6 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { isCodexModel, registerCodexFastFeature } from "./codex-fast.ts";
 import { registerCodexUsageFeature } from "./codex-usage.ts";
 
-type AssistantUsage = {
-	cost?: { total?: number };
-};
-
-type MessageWithUsage = {
-	usage?: AssistantUsage;
-};
-
-function getAssistantUsage(message: unknown): AssistantUsage | undefined {
-	return (message as MessageWithUsage).usage;
-}
-
 type Rgb = readonly [red: number, green: number, blue: number];
 
 type FooterPalette = {
@@ -61,11 +49,15 @@ function getFooterPalette(theme: Theme): FooterPalette {
 	return theme.name?.toLowerCase().includes("light") ? FLEXOKI_LIGHT : FLEXOKI_DARK;
 }
 
+function isPaletteThinkingLevel(level: string): level is keyof FooterPalette["thinking"] {
+	return level === "low" || level === "medium" || level === "high" || level === "xhigh" || level === "max";
+}
+
 function styleThinkingLevel(theme: Theme, palette: FooterPalette, level: string): string {
 	if (level === "off") return theme.fg("thinkingOff", level);
 	if (level === "minimal") return theme.fg("dim", level);
-	if (level in palette.thinking) {
-		const styled = colorize(palette.thinking[level as keyof typeof palette.thinking], level);
+	if (isPaletteThinkingLevel(level)) {
+		const styled = colorize(palette.thinking[level], level);
 		return level === "high" || level === "xhigh" || level === "max" ? theme.bold(styled) : styled;
 	}
 	return colorize(palette.primary, level);
@@ -111,7 +103,7 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 					let cost = 0;
 					for (const entry of ctx.sessionManager.getBranch()) {
 						if (entry.type === "message" && entry.message.role === "assistant") {
-							cost += getAssistantUsage(entry.message)?.cost?.total ?? 0;
+							cost += entry.message.usage.cost.total;
 						}
 					}
 

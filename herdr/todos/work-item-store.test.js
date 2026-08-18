@@ -66,6 +66,16 @@ test("structured intent, progress, and nested checklists round-trip as JSON", ()
 	} finally { f.cleanup(); }
 });
 
+test("malformed persisted Work Items are rejected at the storage boundary", () => {
+	const f = fixture("pi-adam-work-invalid-");
+	try {
+		const directory = join(f.cwd, ".pi", "work-items");
+		mkdirSync(directory, { recursive: true });
+		writeFileSync(join(directory, "bad.json"), JSON.stringify({ id: "bad", checklist: "not-an-array" }));
+		assert.equal(getWorkItem(f.cwd, "bad"), undefined);
+	} finally { f.cleanup(); }
+});
+
 test("promotion and deferral preserve identity, provenance, and structured context", () => {
 	const f = fixture("pi-adam-work-kind-");
 	try {

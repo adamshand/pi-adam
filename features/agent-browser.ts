@@ -1,5 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { delimiter, resolve } from "node:path";
+import { Type } from "typebox";
+import { Check, Parse } from "typebox/value";
 
 const PACKAGE_BIN = resolve(import.meta.dirname, "..", "node_modules", ".bin");
 const SKILLS_DIR = resolve(import.meta.dirname, "..", "skills");
@@ -14,16 +16,16 @@ const MANAGED_ENVIRONMENT_NAMES = [
 
 type Environment = Record<string, string | undefined>;
 
-type SessionListResponse = {
-	data?: {
-		sessions?: unknown;
-	};
-};
+const SessionListResponseSchema = Type.Object({
+	data: Type.Optional(Type.Object({
+		sessions: Type.Optional(Type.Array(Type.Unknown())),
+	})),
+});
 
 export function parseActiveAgentBrowserSessions(stdout: string): string[] {
 	try {
-		const sessions = (JSON.parse(stdout) as SessionListResponse).data?.sessions;
-		return Array.isArray(sessions) ? sessions.filter((value): value is string => typeof value === "string") : [];
+		const sessions = Parse(SessionListResponseSchema, JSON.parse(stdout)).data?.sessions ?? [];
+		return sessions.filter((value): value is string => Check(Type.String(), value));
 	} catch {
 		return [];
 	}

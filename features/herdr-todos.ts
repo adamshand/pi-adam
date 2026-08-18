@@ -2,17 +2,11 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { readViewState, writeViewState } from "../herdr/todos/view-state.js";
-import { clearCompleted, isCompleted, listTodos, migrateLegacyWorkItems } from "../herdr/todos/work-item-store.js";
-
-type BoardView = "todos" | "ideas";
+import { Type } from "typebox";
+import { Parse } from "typebox/value";
+import { readViewState, writeViewState, type BoardViewState } from "../herdr/todos/view-state.js";
+import { clearCompleted, isCompleted, listTodos, migrateLegacyWorkItems, type Todo } from "../herdr/todos/work-item-store.js";
 type Visibility = "auto" | "shown" | "hidden";
-
-type TodoRecord = {
-	id: string;
-	status: string;
-	updatedAt: string;
-};
 
 type TodoSnapshot = {
 	total: number;
@@ -27,18 +21,24 @@ type HerdrResult = {
 	stderr: string;
 };
 
-type PaneRecord = {
-	label?: string;
-	pane_id?: string;
-};
+const PaneRecordSchema = Type.Object({
+	label: Type.Optional(Type.String()),
+	pane_id: Type.Optional(Type.String()),
+});
 
-type PaneListResponse = {
-	result?: { panes?: PaneRecord[] };
-};
+const PaneListResponseSchema = Type.Object({
+	result: Type.Optional(Type.Object({
+		panes: Type.Optional(Type.Array(PaneRecordSchema)),
+	})),
+});
 
-type PluginPaneOpenResponse = {
-	result?: { plugin_pane?: { pane?: PaneRecord } };
-};
+const PluginPaneOpenResponseSchema = Type.Object({
+	result: Type.Optional(Type.Object({
+		plugin_pane: Type.Optional(Type.Object({
+			pane: Type.Optional(PaneRecordSchema),
+		})),
+	})),
+});
 
 const PLUGIN_ID = "pi-adam.todos";
 const PANE_ENTRYPOINT = "board";
@@ -50,9 +50,17 @@ function isHerdrPane(): boolean {
 	return process.env.HERDR_ENV === "1";
 }
 
-function parseJson<T>(text: string): T | undefined {
+function parsePaneListResponse(text: string) {
 	try {
-		return JSON.parse(text) as T;
+		return Parse(PaneListResponseSchema, JSON.parse(text));
+	} catch {
+		return undefined;
+	}
+}
+
+function parsePluginPaneOpenResponse(text: string) {
+	try {
+		return Parse(PluginPaneOpenResponseSchema, JSON.parse(text));
 	} catch {
 		return undefined;
 	}
@@ -63,7 +71,7 @@ function boardLabel(sessionId: string): string {
 }
 
 function todoSnapshot(cwd: string, sessionId: string): TodoSnapshot {
-	const todos = listTodos(cwd, { sessionId }) as TodoRecord[];
+	const todos: Todo[] = listTodos(cwd, { sessionId });
 	const done = todos.filter((todo) => isCompleted(todo)).length;
 	return {
 		total: todos.length,
@@ -85,7 +93,7 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 	let boardPaneId: string | undefined;
 	let currentSessionId = "";
 	let viewStatePath = "";
-	let viewState: { view: BoardView } = { view: "todos" };
+	let viewState: BoardViewState = { view: "todos" };
 	let visibility: Visibility = "auto";
 	let lastSignature: string | undefined;
 	let lastActive = 0;
@@ -106,7 +114,7 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 		const result = await runHerdr(["pane", "list", "--workspace", workspaceId]);
 		if (!result.ok) return undefined;
 		const wantedLabel = boardLabel(currentSessionId);
-		return parseJson<PaneListResponse>(result.stdout)?.result?.panes?.find((pane) => pane.label === wantedLabel)?.pane_id;
+		return parsePaneListResponse(result.stdout)?.result?.panes?.find((pane) => pane.label === wantedLabel)?.pane_id;
 	};
 
 	const refreshOpenState = async (): Promise<void> => {
@@ -157,7 +165,7 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 			const sourcePane = process.env.HERDR_PANE_ID;
 			if (sourcePane) args.push("--target-pane", sourcePane);
 			const result = await runHerdr(args);
-			const paneId = parseJson<PluginPaneOpenResponse>(result.stdout)?.result?.plugin_pane?.pane?.pane_id;
+			const paneId = parsePluginPaneOpenResponse(result.stdout)?.result?.plugin_pane?.pane?.pane_id;
 			open = result.ok && paneId !== undefined;
 			boardPaneId = open ? paneId : undefined;
 			if (boardPaneId) {
@@ -182,7 +190,7 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 		if (!isHerdrPane() || reconciling || !currentSessionId) return;
 		reconciling = true;
 		try {
-			const sharedState = readViewState(viewStatePath, viewState.view) as { view: BoardView };
+			const sharedState = readViewState(viewStatePath, viewState.view);
 			const viewChanged = sharedState.view !== viewState.view;
 			viewState = sharedState;
 			const current = todoSnapshot(ctx.cwd, currentSessionId);
@@ -220,7 +228,7 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 		currentSessionId = ctx.sessionManager.getSessionId();
 		const projectKey = createHash("sha256").update(ctx.cwd).digest("hex").slice(0, 12);
 		viewStatePath = join(tmpdir(), "pi-adam-herdr-todos", projectKey, `${currentSessionId}.view`);
-		viewState = readViewState(viewStatePath, "todos") as { view: BoardView };
+		viewState = readViewState(viewStatePath, "todos");
 		visibility = "auto";
 		open = false;
 		opening = false;
@@ -319,7 +327,7 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 					ctx.ui.notify("pi-adam: Ideas are dismissed individually", "info");
 					return;
 				}
-				const completed = (listTodos(ctx.cwd, { sessionId: currentSessionId }) as TodoRecord[]).filter((todo) => isCompleted(todo));
+				const completed = listTodos(ctx.cwd, { sessionId: currentSessionId }).filter((todo) => isCompleted(todo));
 				if (completed.length === 0) {
 					ctx.ui.notify("pi-adam: no completed Todos to clear", "info");
 					return;

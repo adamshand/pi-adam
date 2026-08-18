@@ -3,22 +3,38 @@ import { type AutocompleteItem, type AutocompleteProvider, Key, matchesKey } fro
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { Type, type Static } from "typebox";
+import { Parse } from "typebox/value";
 
 const STATE_PATH = join(homedir(), ".pi", "agent", "extensions", "pi-adam", "state.json");
 const MAX_TRACKED_COMMANDS = 200;
 
-type CommandUsage = { lastUsed: number; count: number };
-type State = { version: 1; commands: Record<string, CommandUsage> };
+const StateSchema = Type.Object({
+	version: Type.Literal(1),
+	commands: Type.Record(Type.String(), Type.Object({
+		lastUsed: Type.Number(),
+		count: Type.Number(),
+	})),
+});
+
+type State = Static<typeof StateSchema>;
 
 function defaultState(): State {
 	return { version: 1, commands: {} };
 }
 
+export function parseMruState(text: string): State | undefined {
+	try {
+		return Parse(StateSchema, JSON.parse(text));
+	} catch {
+		return undefined;
+	}
+}
+
 function loadState(): State {
 	try {
 		if (!existsSync(STATE_PATH)) return defaultState();
-		const parsed = JSON.parse(readFileSync(STATE_PATH, "utf8")) as Partial<State>;
-		return { version: 1, commands: parsed.commands && typeof parsed.commands === "object" ? parsed.commands : {} };
+		return parseMruState(readFileSync(STATE_PATH, "utf8")) ?? defaultState();
 	} catch {
 		return defaultState();
 	}

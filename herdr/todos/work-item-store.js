@@ -1,6 +1,42 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { Type } from "typebox";
+import { Check, Parse } from "typebox/value";
+
+const ChecklistEntrySchema = Type.Object({
+	text: Type.Optional(Type.String()),
+	done: Type.Optional(Type.Boolean()),
+	items: Type.Optional(Type.Array(Type.Unknown())),
+});
+
+const WorkItemFileSchema = Type.Object({
+	id: Type.Optional(Type.String()),
+	kind: Type.Optional(Type.String()),
+	title: Type.Optional(Type.String()),
+	intent: Type.Optional(Type.String()),
+	progress: Type.Optional(Type.String()),
+	checklist: Type.Optional(Type.Array(Type.Unknown())),
+	status: Type.Optional(Type.String()),
+	owner_session_id: Type.Optional(Type.String()),
+	created_in_session_id: Type.Optional(Type.String()),
+	created_at: Type.Optional(Type.String()),
+	updated_at: Type.Optional(Type.String()),
+});
+
+const LegacyMetadataSchema = Type.Object({
+	id: Type.Optional(Type.String()),
+	kind: Type.Optional(Type.String()),
+	title: Type.Optional(Type.String()),
+	status: Type.Optional(Type.String()),
+	owner_session_id: Type.Optional(Type.String()),
+	created_in_session_id: Type.Optional(Type.String()),
+	origin_session_id: Type.Optional(Type.String()),
+	assigned_to_session: Type.Optional(Type.String()),
+	created_at: Type.Optional(Type.String()),
+	updated_at: Type.Optional(Type.String()),
+	tags: Type.Optional(Type.Array(Type.String())),
+});
 
 export const SCHEMA_VERSION = 1;
 export const TODO_STATUSES = ["ready", "in_progress", "done"];
@@ -23,7 +59,7 @@ export function normalizeTodoStatus(value) {
 export function normalizeChecklist(items) {
 	if (!Array.isArray(items)) return [];
 	return items.flatMap((item) => {
-		if (!item || typeof item !== "object") return [];
+		if (!Check(ChecklistEntrySchema, item)) return [];
 		const text = String(item.text ?? "").trim();
 		if (!text) return [];
 		const children = normalizeChecklist(item.items);
@@ -61,19 +97,19 @@ export function workItemPath(cwd, id) {
 
 export function readWorkItem(path) {
 	try {
-		const data = JSON.parse(readFileSync(path, "utf8"));
+		const data = Parse(WorkItemFileSchema, JSON.parse(readFileSync(path, "utf8")));
 		const kind = data.kind === "idea" ? "idea" : "todo";
 		return {
 			path,
 			id: String(data.id ?? basename(path, ".json")),
 			kind,
 			title: String(data.title ?? "Untitled"),
-			intent: typeof data.intent === "string" ? data.intent : "",
-			progress: typeof data.progress === "string" ? data.progress : "",
+			intent: data.intent ?? "",
+			progress: data.progress ?? "",
 			checklist: normalizeChecklist(data.checklist),
 			status: kind === "todo" ? normalizeTodoStatus(data.status) : undefined,
-			ownerSessionId: kind === "todo" && typeof data.owner_session_id === "string" ? data.owner_session_id : undefined,
-			createdInSessionId: typeof data.created_in_session_id === "string" ? data.created_in_session_id : undefined,
+			ownerSessionId: kind === "todo" ? data.owner_session_id : undefined,
+			createdInSessionId: data.created_in_session_id,
 			createdAt: String(data.created_at ?? ""),
 			updatedAt: String(data.updated_at ?? data.created_at ?? ""),
 		};
@@ -90,15 +126,16 @@ export function writeWorkItem(item) {
 		id: normalizeWorkItemId(item.id),
 		kind,
 		title: String(item.title ?? "Untitled"),
-		...(item.intent ? { intent: String(item.intent) } : {}),
-		...(item.progress ? { progress: String(item.progress) } : {}),
-		...(normalizeChecklist(item.checklist).length > 0 ? { checklist: normalizeChecklist(item.checklist) } : {}),
-		...(kind === "todo" ? { status: normalizeTodoStatus(item.status) } : {}),
-		...(kind === "todo" && item.ownerSessionId ? { owner_session_id: item.ownerSessionId } : {}),
-		...(item.createdInSessionId ? { created_in_session_id: item.createdInSessionId } : {}),
 		created_at: createdAt,
 		updated_at: item.updatedAt || createdAt,
 	};
+	const checklist = normalizeChecklist(item.checklist);
+	if (item.intent) data.intent = String(item.intent);
+	if (item.progress) data.progress = String(item.progress);
+	if (checklist.length > 0) data.checklist = checklist;
+	if (kind === "todo") data.status = normalizeTodoStatus(item.status);
+	if (kind === "todo" && item.ownerSessionId) data.owner_session_id = item.ownerSessionId;
+	if (item.createdInSessionId) data.created_in_session_id = item.createdInSessionId;
 	mkdirSync(dirname(item.path), { recursive: true });
 	const temporary = `${item.path}.tmp-${process.pid}-${Date.now()}`;
 	writeFileSync(temporary, `${JSON.stringify(data, null, 2)}\n`, "utf8");
@@ -262,7 +299,7 @@ function parseMarkdownRecord(path) {
 		const headerEnd = text.search(/\r?\n\r?\n/);
 		const headerText = headerEnd === -1 ? text : text.slice(0, headerEnd);
 		const body = headerEnd === -1 ? "" : text.slice(headerEnd).replace(/^\r?\n\r?\n/, "");
-		return { metadata: JSON.parse(headerText), body };
+		return { metadata: Parse(LegacyMetadataSchema, JSON.parse(headerText)), body };
 	} catch {
 		return undefined;
 	}
@@ -285,7 +322,7 @@ function markdownBodyFields(body, status, kind) {
 }
 
 function legacySessionId(metadata) {
-	const tag = Array.isArray(metadata.tags) ? metadata.tags.find((value) => typeof value === "string" && value.startsWith("session:")) : undefined;
+	const tag = metadata.tags?.find((value) => value.startsWith("session:"));
 	return tag?.slice("session:".length);
 }
 

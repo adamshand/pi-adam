@@ -3,13 +3,16 @@
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
-import { StringEnum, type Model } from "@earendil-works/pi-ai";
+import { StringEnum, type Api, type Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
+import { Parse } from "typebox/value";
 import {
 	collectImageBase64,
 	detectImageMimeType,
 	extractResponseId,
+	type JsonValue,
+	JsonValueSchema,
 	parseSseDataBlocks,
 	resolveResponsesUrl,
 	stripDataUrl,
@@ -22,6 +25,13 @@ const IMAGE_GENERATION_TOOL_TYPE = "image_generation";
 const IMAGE_MODEL = "gpt-image-2";
 const IMAGE_SIZES = ["1024x1024", "1024x1536", "1536x1024"] as const;
 const DEFAULT_TARGET_PATH = "/tmp/pi-codex-image-tool";
+const JWT_CLAIM_PATH = "https://api.openai.com/auth";
+
+const JwtClaimsSchema = Type.Object({
+	[JWT_CLAIM_PATH]: Type.Optional(Type.Object({
+		chatgpt_account_id: Type.Optional(Type.String()),
+	})),
+});
 
 const GenerateImageParams = Type.Object({
 	prompt: Type.String({ description: "Detailed prompt describing the image to generate." }),
@@ -53,7 +63,7 @@ type SavedImage = {
 	base64: string;
 };
 
-export function isCodexImageModel(model: Model<any> | undefined): model is Model<any> {
+export function isCodexImageModel(model: Model<Api> | undefined): model is Model<"openai-codex-responses"> {
 	return model?.provider === CODEX_PROVIDER
 		&& model.api === CODEX_API
 		&& /^gpt-5\.(?:5|6)(?:$|-)/.test(model.id);
@@ -71,15 +81,14 @@ function extractChatGptAccountId(token: string): string | undefined {
 		const payload = token.split(".")[1];
 		if (!payload) return undefined;
 		const decoded = Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
-		const claims = JSON.parse(decoded) as Record<string, unknown>;
-		const auth = claims["https://api.openai.com/auth"] as Record<string, unknown> | undefined;
-		return typeof auth?.chatgpt_account_id === "string" ? auth.chatgpt_account_id : undefined;
+		const claims = Parse(JwtClaimsSchema, JSON.parse(decoded));
+		return claims[JWT_CLAIM_PATH]?.chatgpt_account_id;
 	} catch {
 		return undefined;
 	}
 }
 
-async function buildHeaders(ctx: ExtensionContext, model: Model<any>): Promise<Headers> {
+async function buildHeaders(ctx: ExtensionContext, model: Model<Api>): Promise<Headers> {
 	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
 	if (!auth.ok) throw new Error(auth.error);
 
@@ -98,7 +107,7 @@ async function buildHeaders(ctx: ExtensionContext, model: Model<any>): Promise<H
 	return headers;
 }
 
-function buildRequestBody(model: Model<any>, params: GenerateImageParamsType) {
+function buildRequestBody(model: Model<Api>, params: GenerateImageParamsType) {
 	return {
 		model: model.id,
 		store: false,
@@ -136,8 +145,8 @@ async function readImageResponseAndSave(
 	ctx: ExtensionContext,
 	params: GenerateImageParamsType,
 	onSaved?: (saved: SavedImage) => void,
-): Promise<{ payload: unknown; saved: SavedImage }> {
-	const saveFirst = async (payload: unknown, label: string) => {
+): Promise<{ payload: JsonValue; saved: SavedImage }> {
+	const saveFirst = async (payload: JsonValue, label: string) => {
 		const imageBase64 = collectImageBase64(payload)[0];
 		if (!imageBase64) throw new Error(`${label} did not contain base64 image data: ${JSON.stringify(payload).slice(0, 1000)}`);
 		const saved = await saveImageToTarget(ctx, imageBase64, params);
@@ -147,13 +156,15 @@ async function readImageResponseAndSave(
 
 	if (!response.body) {
 		const text = await response.text();
-		const payload = /^\s*(?:event:|data:)/.test(text) ? parseSseDataBlocks(text) : JSON.parse(text);
+		const payload = /^\s*(?:event:|data:)/.test(text)
+			? parseSseDataBlocks(text)
+			: Parse(JsonValueSchema, JSON.parse(text));
 		return { payload, saved: await saveFirst(payload, "Image generation response") };
 	}
 
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
-	const events: unknown[] = [];
+	const events: JsonValue[] = [];
 	let buffer = "";
 	let fullText = "";
 	let saved: SavedImage | undefined;
@@ -185,9 +196,9 @@ async function readImageResponseAndSave(
 	if (buffer.trim()) await processChunk("\n\n");
 
 	if (events.length === 0) {
-		let payload: unknown;
+		let payload: JsonValue;
 		try {
-			payload = JSON.parse(fullText);
+			payload = Parse(JsonValueSchema, JSON.parse(fullText));
 		} catch {
 			throw new Error(`Expected JSON or SSE response but received: ${fullText.slice(0, 500)}`);
 		}
@@ -254,7 +265,7 @@ export function registerCodexImageFeature(pi: ExtensionAPI): void {
 		},
 	});
 
-	const syncActiveTool = (model: Model<any> | undefined) => {
+	const syncActiveTool = (model: Model<Api> | undefined) => {
 		const activeTools = pi.getActiveTools();
 		const hasTool = activeTools.includes(TOOL_NAME);
 		const shouldHaveTool = isCodexImageModel(model);

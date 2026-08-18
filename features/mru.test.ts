@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getSubmittedSlashCommand, registerMruFeature } from "./mru.ts";
+import { getSubmittedSlashCommand, parseMruState, registerMruFeature } from "./mru.ts";
+import { createTestExtensionApi } from "./test-extension.ts";
 
 test("recognizes slash commands submitted with Enter", () => {
 	assert.equal(getSubmittedSlashCommand("\r", "/reload"), "reload");
@@ -10,17 +11,38 @@ test("recognizes slash commands submitted with Enter", () => {
 	assert.equal(getSubmittedSlashCommand("\r", "/"), undefined);
 });
 
+test("rejects malformed persisted command usage", () => {
+	assert.deepEqual(parseMruState('{"version":1,"commands":{"reload":{"lastUsed":10,"count":2}}}'), {
+		version: 1,
+		commands: { reload: { lastUsed: 10, count: 2 } },
+	});
+	assert.equal(parseMruState('{"version":1,"commands":[]}'), undefined);
+	assert.equal(parseMruState('{"version":1,"commands":{"reload":null}}'), undefined);
+});
+
 test("tracks command submissions without replacing the core editor", () => {
-	const handlers = new Map<string, (event: unknown, ctx: any) => unknown>();
+	type SessionContext = {
+		mode: "tui";
+		ui: {
+			addAutocompleteProvider(): void;
+			onTerminalInput(): () => void;
+			getEditorText(): string;
+			setEditorComponent(): void;
+		};
+	};
+	type HarnessEvent = Record<never, never>;
+	type HandlerResult = Record<string, string> | undefined;
+	type Handler = (event: HarnessEvent, ctx: SessionContext) => HandlerResult;
+	const handlers = new Map<string, Handler>();
 	let terminalListenerInstalled = false;
 	const pi = {
-		on(event: string, handler: (event: unknown, ctx: any) => unknown) {
+		on(event: string, handler: Handler) {
 			handlers.set(event, handler);
 		},
 		registerCommand() {},
 	};
 
-	registerMruFeature(pi as any);
+	registerMruFeature(createTestExtensionApi(pi));
 	handlers.get("session_start")?.({}, {
 		mode: "tui",
 		ui: {

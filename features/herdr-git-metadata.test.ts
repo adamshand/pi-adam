@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { registerHerdrGitMetadataFeature } from "./herdr-git-metadata.ts";
+import { createTestExtensionApi } from "./test-extension.ts";
 
-type Handler = (event: any, ctx?: any) => unknown;
+type HarnessEvent = { reason?: string; previousSessionFile?: string };
+type HarnessContext = {
+	cwd: string;
+	sessionManager: {
+		getSessionFile(): string;
+		getSessionId(): string;
+	};
+};
+type Handler = (event: HarnessEvent, ctx?: HarnessContext) => void | Promise<void>;
 
 type ExecCall = {
 	command: string;
@@ -23,7 +32,7 @@ type GitState = {
 function createHarness(initialState: GitState = {}) {
 	const handlers = new Map<string, Handler>();
 	const calls: ExecCall[] = [];
-	const clearedIntervals: unknown[] = [];
+	const clearedIntervals: Array<string | number | object> = [];
 	let intervalHandler: (() => void) | undefined;
 	let currentPaneId = "w1:p2";
 	let state = { hasUpstream: true, ...initialState };
@@ -76,7 +85,7 @@ function createHarness(initialState: GitState = {}) {
 	};
 
 	registerHerdrGitMetadataFeature(
-		pi as any,
+		createTestExtensionApi(pi),
 		{ HERDR_ENV: "1", HERDR_PANE_ID: "w1:p2" },
 		{
 			pollIntervalMs: 5000,
@@ -284,10 +293,10 @@ test("stops polling and clears metadata when the Pi session shuts down", async (
 
 test("is inert outside a Herdr pane", () => {
 	const handlers = new Map<string, Handler>();
-	registerHerdrGitMetadataFeature({
+	registerHerdrGitMetadataFeature(createTestExtensionApi({
 		on(event: string, handler: Handler) {
 			handlers.set(event, handler);
 		},
-	} as any, { HERDR_ENV: "0" });
+	}), { HERDR_ENV: "0" });
 	assert.equal(handlers.size, 0);
 });

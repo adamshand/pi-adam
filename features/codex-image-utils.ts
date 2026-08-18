@@ -1,3 +1,36 @@
+import { Type, type Static } from "typebox";
+import { Check, Parse } from "typebox/value";
+
+export const JsonValueSchema = Type.Cyclic({
+	JsonValue: Type.Union([
+		Type.Null(),
+		Type.Boolean(),
+		Type.Number(),
+		Type.String(),
+		Type.Array(Type.Ref("JsonValue")),
+		Type.Record(Type.String(), Type.Ref("JsonValue")),
+	]),
+}, "JsonValue");
+
+export type JsonValue = Static<typeof JsonValueSchema>;
+type JsonObject = { [key: string]: JsonValue };
+
+export type ImageFormat = {
+	mimeType: "image/jpeg" | "image/webp" | "image/png";
+	extension: "jpg" | "webp" | "png";
+};
+
+const JsonObjectSchema = Type.Record(Type.String(), JsonValueSchema);
+const StringSchema = Type.String();
+
+function isJsonObject(value: JsonValue): value is JsonObject {
+	return Check(JsonObjectSchema, value);
+}
+
+function isString(value: JsonValue | undefined): value is string {
+	return Check(StringSchema, value);
+}
+
 export function resolveResponsesUrl(model: { baseUrl: string }): string {
 	const baseUrl = model.baseUrl.replace(/\/+$/, "");
 	if (baseUrl.endsWith("/codex/responses")) return baseUrl;
@@ -14,27 +47,25 @@ function isProbablyBase64Image(value: string): boolean {
 	return stripped.length > 100 && /^[A-Za-z0-9+/=_-]+$/.test(stripped);
 }
 
-export function collectImageBase64(payload: unknown, images: string[] = []): string[] {
-	if (!payload || typeof payload !== "object") return images;
+export function collectImageBase64(payload: JsonValue, images: string[] = []): string[] {
 	if (Array.isArray(payload)) {
 		for (const item of payload) collectImageBase64(item, images);
 		return [...new Set(images)];
 	}
+	if (!isJsonObject(payload)) return images;
 
-	const record = payload as Record<string, unknown>;
-	if (record.type === "image_generation_call" && typeof record.result === "string") {
-		images.push(stripDataUrl(record.result));
+	if (payload.type === "image_generation_call" && isString(payload.result)) {
+		images.push(stripDataUrl(payload.result));
 	}
 	for (const key of ["partial_image_b64", "b64_json", "image_base64", "base64", "data", "result"] as const) {
-		const value = record[key];
-		if (typeof value === "string" && isProbablyBase64Image(value)) images.push(stripDataUrl(value));
+		const value = payload[key];
+		if (isString(value) && isProbablyBase64Image(value)) images.push(stripDataUrl(value));
 	}
-	for (const value of Object.values(record)) collectImageBase64(value, images);
+	for (const value of Object.values(payload)) collectImageBase64(value, images);
 	return [...new Set(images)];
 }
 
-export function extractResponseId(payload: unknown): string | undefined {
-	if (!payload || typeof payload !== "object") return undefined;
+export function extractResponseId(payload: JsonValue): string | undefined {
 	if (Array.isArray(payload)) {
 		for (const item of payload) {
 			const id = extractResponseId(item);
@@ -42,24 +73,21 @@ export function extractResponseId(payload: unknown): string | undefined {
 		}
 		return undefined;
 	}
-	const record = payload as Record<string, unknown>;
-	if (typeof record.id === "string" && record.id.startsWith("resp_")) return record.id;
-	const response = record.response;
-	if (response && typeof response === "object") {
-		const id = (response as Record<string, unknown>).id;
-		if (typeof id === "string") return id;
-	}
+	if (!isJsonObject(payload)) return undefined;
+	if (isString(payload.id) && payload.id.startsWith("resp_")) return payload.id;
+	const response = payload.response;
+	if (response !== undefined && isJsonObject(response) && isString(response.id)) return response.id;
 	return undefined;
 }
 
-export function detectImageMimeType(base64: string): { mimeType: string; extension: string } {
+export function detectImageMimeType(base64: string): ImageFormat {
 	if (base64.startsWith("/9j/")) return { mimeType: "image/jpeg", extension: "jpg" };
 	if (base64.startsWith("UklGR")) return { mimeType: "image/webp", extension: "webp" };
 	return { mimeType: "image/png", extension: "png" };
 }
 
-export function parseSseDataBlocks(text: string): unknown[] {
-	const events: unknown[] = [];
+export function parseSseDataBlocks(text: string): JsonValue[] {
+	const events: JsonValue[] = [];
 	for (const block of text.split(/\n\n+/)) {
 		const data = block
 			.split("\n")
@@ -68,9 +96,9 @@ export function parseSseDataBlocks(text: string): unknown[] {
 			.join("\n");
 		if (!data || data === "[DONE]") continue;
 		try {
-			events.push(JSON.parse(data));
+			events.push(Parse(JsonValueSchema, JSON.parse(data)));
 		} catch {
-			// Ignore non-JSON SSE frames.
+			// Ignore non-JSON or non-JSON-value SSE frames.
 		}
 	}
 	return events;

@@ -1,5 +1,9 @@
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { Type } from "typebox";
+import { Parse } from "typebox/value";
+
+const ViewStateFileSchema = Type.Object({ view: Type.String() });
 
 export const BOARD_VIEWS = ["todos", "ideas"];
 
@@ -15,7 +19,7 @@ export function readViewState(path, fallbackView = "todos") {
 	try {
 		const text = readFileSync(path, "utf8").trim();
 		let parsed;
-		try { parsed = JSON.parse(text); } catch { parsed = { view: text }; }
+		try { parsed = Parse(ViewStateFileSchema, JSON.parse(text)); } catch { parsed = { view: text }; }
 		return { view: normalizeBoardView(parsed.view, fallback) };
 	} catch {
 		return { view: fallback };

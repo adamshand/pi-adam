@@ -1,4 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { Parse } from "typebox/value";
 
 type HerdrEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -7,20 +9,30 @@ type GitMetadata = {
 	gitStatus?: string;
 };
 
+type TimerId = ReturnType<typeof setInterval> | number | string;
+
 type TimerOptions = {
 	pollIntervalMs?: number;
-	setInterval?: (handler: () => void, intervalMs: number) => unknown;
-	clearInterval?: (id: unknown) => void;
+	setInterval?: (handler: () => void, intervalMs: number) => TimerId;
+	clearInterval?: (id: TimerId) => void;
 };
 
-type PaneListResponse = {
-	result?: {
-		panes?: Array<{
-			pane_id?: string;
-			agent_session?: { agent?: string; value?: string };
-		}>;
-	};
+type WorkingTreeChanges = {
+	tracked: number;
+	untracked: number;
 };
+
+const PaneListResponseSchema = Type.Object({
+	result: Type.Optional(Type.Object({
+		panes: Type.Optional(Type.Array(Type.Object({
+			pane_id: Type.Optional(Type.String()),
+			agent_session: Type.Optional(Type.Object({
+				agent: Type.Optional(Type.String()),
+				value: Type.Optional(Type.String()),
+			})),
+		}))),
+	})),
+});
 
 const METADATA_SOURCE = "pi-adam.git";
 const DEFAULT_POLL_INTERVAL_MS = 5000;
@@ -29,7 +41,7 @@ function sameMetadata(left: GitMetadata | undefined, right: GitMetadata): boolea
 	return left !== undefined && left.branch === right.branch && left.gitStatus === right.gitStatus;
 }
 
-function countWorkingTreeChanges(stdout: string): { tracked: number; untracked: number } {
+function countWorkingTreeChanges(stdout: string): WorkingTreeChanges {
 	let tracked = 0;
 	let untracked = 0;
 	const records = stdout.split("\0");
@@ -46,7 +58,7 @@ function countWorkingTreeChanges(stdout: string): { tracked: number; untracked: 
 }
 
 function formatGitStatus(
-	workingTree: { tracked: number; untracked: number },
+	workingTree: WorkingTreeChanges,
 	upstreamStdout?: string,
 ): string | undefined {
 	const upstream = upstreamStdout?.trim().match(/^(\d+)\s+(\d+)$/);
@@ -71,8 +83,8 @@ export function registerHerdrGitMetadataFeature(
 
 	const pollIntervalMs = timerOptions.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 	const startInterval = timerOptions.setInterval ?? ((handler, intervalMs) => setInterval(handler, intervalMs));
-	const stopInterval = timerOptions.clearInterval ?? ((id) => clearInterval(id as ReturnType<typeof setInterval>));
-	let intervalId: unknown;
+	const stopInterval = timerOptions.clearInterval ?? ((id) => clearInterval(id));
+	let intervalId: TimerId | undefined;
 	let active = false;
 	let paneId = initialPaneId;
 	let sessionFiles: string[] = [];
@@ -125,9 +137,9 @@ export function registerHerdrGitMetadataFeature(
 		if (sessionFiles.length === 0 && !sessionId) return undefined;
 		const result = await pi.exec("herdr", ["pane", "list"], { timeout: 5000 });
 		if (result.code !== 0) return undefined;
-		let response: PaneListResponse;
+		let response;
 		try {
-			response = JSON.parse(result.stdout) as PaneListResponse;
+			response = Parse(PaneListResponseSchema, JSON.parse(result.stdout));
 		} catch {
 			return undefined;
 		}

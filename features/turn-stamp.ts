@@ -44,7 +44,9 @@ export function registerTurnStampFeature(
 	let hasPendingAssistantTurn = false;
 
 	pi.registerEntryRenderer<TurnStampData>(TURN_STAMP_ENTRY_TYPE, (entry, _options, theme) => {
-		const label = formatTurnStamp(entry.data?.completedAt);
+		const completedAt = entry.data?.completedAt;
+		if (completedAt === undefined) return undefined;
+		const label = formatTurnStamp(completedAt);
 		if (!label) return undefined;
 		return {
 			render(width: number): string[] {

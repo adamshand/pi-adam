@@ -1,5 +1,8 @@
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type, type Static } from "typebox";
+import { Check } from "typebox/value";
+import { JsonValueSchema } from "./codex-image-utils.ts";
 
 const CODEX_PROVIDER = "openai-codex";
 const CODEX_API = "openai-codex-responses";
@@ -15,32 +18,43 @@ const FAST_MODEL_IDS = new Set([
 	"gpt-5.6-luna",
 ]);
 
-type FastEntry = {
-	enabled?: boolean;
-};
+const FastEntrySchema = Type.Object({
+	enabled: Type.Optional(Type.Boolean()),
+});
+
+const ProviderRequestBodySchema = Type.Record(Type.String(), JsonValueSchema);
+
+type ProviderRequestBody = Static<typeof ProviderRequestBodySchema>;
 
 export type CodexFastSnapshot = {
 	enabled: boolean;
 	eligible: boolean;
 };
 
-export function isCodexModel(model: Model<any> | undefined): model is Model<any> {
+type CodexFastEligibilityContext = {
+	model: Model<Api> | undefined;
+	modelRegistry: Pick<ExtensionContext["modelRegistry"], "isUsingOAuth">;
+};
+
+export function isCodexModel(model: Model<Api> | undefined): model is Model<"openai-codex-responses"> {
 	return model?.provider === CODEX_PROVIDER && model.api === CODEX_API;
 }
 
-export function isCodexFastModel(model: Model<any> | undefined): model is Model<any> {
+export function isCodexFastModel(model: Model<Api> | undefined): model is Model<"openai-codex-responses"> {
 	return isCodexModel(model) && FAST_MODEL_IDS.has(model.id);
 }
 
-export function isCodexFastEligible(ctx: ExtensionContext): boolean {
+export function isCodexFastEligible(ctx: CodexFastEligibilityContext): boolean {
 	return isCodexFastModel(ctx.model) && ctx.modelRegistry.isUsingOAuth(ctx.model);
 }
 
-export function applyCodexFastTier(payload: unknown, enabled: boolean, eligible: boolean): unknown {
-	if (!enabled || !eligible || !payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
-	const body = payload as Record<string, unknown>;
-	if (body.service_tier === undefined) body.service_tier = FAST_TIER;
-	return body;
+export function applyCodexFastTier(
+	payload: ProviderRequestBody,
+	enabled: boolean,
+	eligible: boolean,
+): ProviderRequestBody {
+	if (enabled && eligible && payload.service_tier === undefined) payload.service_tier = FAST_TIER;
+	return payload;
 }
 
 export function registerCodexFastFeature(
@@ -59,12 +73,11 @@ export function registerCodexFastFeature(
 		enabled = false;
 		for (const entry of ctx.sessionManager.getEntries()) {
 			if (entry.type !== "custom" || entry.customType !== FAST_ENTRY_TYPE) continue;
-			const value = (entry.data as FastEntry | undefined)?.enabled;
-			if (typeof value === "boolean") enabled = value;
+			if (Check(FastEntrySchema, entry.data) && entry.data.enabled !== undefined) enabled = entry.data.enabled;
 		}
 	};
 
-	const setEnabled = (next: boolean, ctx: ExtensionContext) => {
+	const setEnabled = (next: boolean) => {
 		enabled = next;
 		pi.appendEntry(FAST_ENTRY_TYPE, { enabled });
 		onChange();
@@ -77,7 +90,7 @@ export function registerCodexFastFeature(
 			onChange();
 			return;
 		}
-		setEnabled(!enabled, ctx);
+		setEnabled(!enabled);
 		ctx.ui.notify(`Codex Fast mode ${enabled ? "on" : "off"}`, "info");
 	};
 
@@ -93,7 +106,7 @@ export function registerCodexFastFeature(
 
 	pi.on("before_provider_request", (event, ctx) => {
 		currentCtx = ctx;
-		if (!enabled || !isCodexFastEligible(ctx)) return;
+		if (!enabled || !isCodexFastEligible(ctx) || !Check(ProviderRequestBodySchema, event.payload)) return;
 		return applyCodexFastTier(event.payload, enabled, true);
 	});
 

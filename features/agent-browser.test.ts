@@ -5,24 +5,35 @@ import {
 	parseActiveAgentBrowserSessions,
 	registerAgentBrowserFeature,
 } from "./agent-browser.ts";
+import { createTestExtensionApi } from "./test-extension.ts";
 
-type Handler = (event: any, ctx?: any) => unknown;
+type HarnessEvent = { reason: string; cwd?: string };
+type HarnessContext = { sessionManager: { getSessionId(): string } };
+type ResourceResult = { skillPaths: string[] };
+type Handler = (event: HarnessEvent, ctx?: HarnessContext) => ResourceResult | undefined;
+type TestEnvironment = {
+	PATH?: string;
+	AGENT_BROWSER_SESSION?: string;
+	AGENT_BROWSER_CONTENT_BOUNDARIES?: string;
+	AGENT_BROWSER_MAX_OUTPUT?: string;
+	AGENT_BROWSER_IDLE_TIMEOUT_MS?: string;
+};
 
 type ExecCall = {
 	command: string;
 	args: string[];
-	options: unknown;
+	options: { timeout: number };
 };
 
 function createHarness(activeSessions: string[] = []) {
 	const handlers = new Map<string, Handler>();
 	const calls: ExecCall[] = [];
-	const environment: Record<string, string | undefined> = { PATH: "/usr/bin" };
+	const environment: TestEnvironment = { PATH: "/usr/bin" };
 	const pi = {
 		on(event: string, handler: Handler) {
 			handlers.set(event, handler);
 		},
-		async exec(command: string, args: string[], options: unknown) {
+		async exec(command: string, args: string[], options: { timeout: number }) {
 			calls.push({ command, args, options });
 			if (args.join(" ") === "session list --json") {
 				return {
@@ -35,7 +46,7 @@ function createHarness(activeSessions: string[] = []) {
 		},
 	};
 
-	registerAgentBrowserFeature(pi as any, environment);
+	registerAgentBrowserFeature(createTestExtensionApi(pi), environment);
 
 	const context = (sessionId: string) => ({
 		sessionManager: { getSessionId: () => sessionId },
@@ -121,10 +132,8 @@ test("ignores malformed session-list output", () => {
 
 test("contributes the dynamic agent-browser skill", () => {
 	const { handlers } = createHarness();
-	const resources = handlers.get("resources_discover")?.({ reason: "startup", cwd: "/src/app" }) as {
-		skillPaths: string[];
-	};
+	const resources = handlers.get("resources_discover")?.({ reason: "startup", cwd: "/src/app" });
 
-	assert.equal(resources.skillPaths.length, 1);
-	assert.match(resources.skillPaths[0] ?? "", /skills$/);
+	assert.equal(resources?.skillPaths.length, 1);
+	assert.match(resources?.skillPaths[0] ?? "", /skills$/);
 });

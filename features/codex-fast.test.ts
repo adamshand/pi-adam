@@ -1,11 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Model } from "@earendil-works/pi-ai";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { applyCodexFastTier, isCodexFastEligible, isCodexFastModel, isCodexModel } from "./codex-fast.ts";
 
-function model(id: string, provider = "openai-codex", api = "openai-codex-responses"): Model<any> {
-	return { id, provider, api } as Model<any>;
+function model(
+	id: string,
+	provider: Model<Api>["provider"] = "openai-codex",
+	api: Api = "openai-codex-responses",
+): Model<Api> {
+	return {
+		id,
+		name: id,
+		provider,
+		api,
+		baseUrl: "https://example.test",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128_000,
+		maxTokens: 8_192,
+	};
 }
 
 test("identifies Codex models independently of Fast support", () => {
@@ -26,7 +40,7 @@ test("requires ChatGPT OAuth in addition to a supported model", () => {
 	const ctx = (oauth: boolean) => ({
 		model: model("gpt-5.6-sol"),
 		modelRegistry: { isUsingOAuth: () => oauth },
-	}) as unknown as ExtensionContext;
+	});
 	assert.equal(isCodexFastEligible(ctx(true)), true);
 	assert.equal(isCodexFastEligible(ctx(false)), false);
 });
