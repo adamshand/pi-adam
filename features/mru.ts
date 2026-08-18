@@ -1,13 +1,5 @@
-import { CustomEditor, type ExtensionAPI, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import {
-	type AutocompleteItem,
-	type AutocompleteProvider,
-	type EditorComponent,
-	type EditorTheme,
-	Key,
-	matchesKey,
-	type TUI,
-} from "@earendil-works/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { type AutocompleteItem, type AutocompleteProvider, Key, matchesKey } from "@earendil-works/pi-tui";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -106,76 +98,22 @@ function createRecentCommandProvider(current: AutocompleteProvider, state: State
 	};
 }
 
-class TrackingEditor implements EditorComponent {
-	private submitHandler?: (text: string) => void;
-	private changeHandler?: (text: string) => void;
-	readonly actionHandlers: Map<string, () => void>;
-
-	constructor(
-		private readonly base: EditorComponent,
-		private readonly onSlashSubmit: (text: string) => void,
-	) {
-		const maybeActionHandlers = (base as { actionHandlers?: unknown }).actionHandlers;
-		this.actionHandlers = maybeActionHandlers instanceof Map ? maybeActionHandlers : new Map();
-		base.onSubmit = (text: string) => {
-			this.onSlashSubmit(text);
-			this.submitHandler?.(text);
-		};
-		base.onChange = (text: string) => this.changeHandler?.(text);
-	}
-
-	get onSubmit() { return this.submitHandler; }
-	set onSubmit(handler: ((text: string) => void) | undefined) { this.submitHandler = handler; }
-	get onChange() { return this.changeHandler; }
-	set onChange(handler: ((text: string) => void) | undefined) { this.changeHandler = handler; }
-	get onEscape() { return (this.base as { onEscape?: () => void }).onEscape; }
-	set onEscape(handler: (() => void) | undefined) { (this.base as { onEscape?: () => void }).onEscape = handler; }
-	get onCtrlD() { return (this.base as { onCtrlD?: () => void }).onCtrlD; }
-	set onCtrlD(handler: (() => void) | undefined) { (this.base as { onCtrlD?: () => void }).onCtrlD = handler; }
-	get onPasteImage() { return (this.base as { onPasteImage?: () => void }).onPasteImage; }
-	set onPasteImage(handler: (() => void) | undefined) { (this.base as { onPasteImage?: () => void }).onPasteImage = handler; }
-	get onExtensionShortcut() { return (this.base as { onExtensionShortcut?: (data: string) => boolean }).onExtensionShortcut; }
-	set onExtensionShortcut(handler: ((data: string) => boolean) | undefined) { (this.base as { onExtensionShortcut?: (data: string) => boolean }).onExtensionShortcut = handler; }
-	get borderColor() { return this.base.borderColor; }
-	set borderColor(color: ((str: string) => string) | undefined) { this.base.borderColor = color; }
-	get wantsKeyRelease() { return (this.base as { wantsKeyRelease?: boolean }).wantsKeyRelease; }
-	render(width: number) { return this.base.render(width); }
-	invalidate() { this.base.invalidate(); }
-	getText() { return this.base.getText(); }
-	setText(text: string) { this.base.setText(text); }
-	addToHistory(text: string) { this.base.addToHistory?.(text); }
-	insertTextAtCursor(text: string) { this.base.insertTextAtCursor?.(text); }
-	getExpandedText() { return this.base.getExpandedText?.() ?? this.base.getText(); }
-	setAutocompleteProvider(provider: AutocompleteProvider) { this.base.setAutocompleteProvider?.(provider); }
-	setPaddingX(padding: number) { this.base.setPaddingX?.(padding); }
-	setAutocompleteMaxVisible(maxVisible: number) { this.base.setAutocompleteMaxVisible?.(maxVisible); }
-
-	handleInput(data: string): void {
-		if (matchesKey(data, Key.enter)) this.onSlashSubmit(this.getExpandedText());
-		this.base.handleInput(data);
-	}
+export function getSubmittedSlashCommand(data: string, editorText: string): string | undefined {
+	return matchesKey(data, Key.enter) ? extractSlashCommand(editorText) : undefined;
 }
 
 export function registerMruFeature(pi: ExtensionAPI): void {
 	const state = loadState();
-	let previousEditorFactory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => EditorComponent) | undefined;
-	let editorInstalled = false;
 
 	pi.on("session_start", (_event, ctx) => {
 		ctx.ui.addAutocompleteProvider((current) => createRecentCommandProvider(current, state));
-		if (!ctx.hasUI) return;
+		if (ctx.mode !== "tui") return;
 
-		previousEditorFactory = ctx.ui.getEditorComponent();
-		ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-			const base = previousEditorFactory?.(tui, theme, keybindings) ?? new CustomEditor(tui, theme, keybindings);
-			return new TrackingEditor(base, (text) => touchCommand(state, text));
+		ctx.ui.onTerminalInput((data) => {
+			const command = getSubmittedSlashCommand(data, ctx.ui.getEditorText());
+			if (command) touchCommand(state, command);
+			return undefined;
 		});
-		editorInstalled = true;
-	});
-
-	pi.on("session_shutdown", (_event, ctx) => {
-		if (editorInstalled && ctx.hasUI) ctx.ui.setEditorComponent(previousEditorFactory);
-		editorInstalled = false;
 	});
 
 	pi.on("input", (event) => {
