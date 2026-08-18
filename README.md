@@ -8,6 +8,9 @@ Personal pi quality-of-life extension.
 - Compact custom footer keeps model, thinking level, and active Codex Fast mode on the left, with cost, context usage, and Codex limits right-aligned.
 - `/fast` toggles Fast mode for supported GPT-5.4–5.6 Codex models using ChatGPT OAuth; `alt+shift+tab` does the same.
 - `codex_image` generates and saves images through Codex's native `gpt-image-2` hosted tool.
+- Bundles a pinned `agent-browser` CLI and loads its current core skill on demand for headless application testing.
+- Gives every Pi session isolated browser state, bounded output, and a 15-minute idle-cleanup backstop.
+- Adds a dim, right-aligned local completion timestamp after each final settled agent response.
 - Loads dotenv-style variables from `~/.pi/env`, then trusted project `.pi/env` files. Existing shell variables take precedence.
 - `/env` lists variables declared by those files with values redacted.
 - `/codex-usage` shows Codex usage, reset times, and available banked resets; `/codex-usage-refresh` refreshes it immediately.
@@ -118,10 +121,22 @@ herdr plugin pane open \
 
 Do not pass `--cwd`: Herdr runs the command from the plugin root, where `board.js` lives.
 
+## Agent browser
+
+The `agent-browser` skill provides a compact command guide and points to the version-matched CLI documentation for deeper workflows.
+
+Browser sessions are headless by default and isolated using the current Pi session ID.
+
+Pi-adam closes an active owned browser during quit or session replacement while preserving it across `/reload`.
+
+Use an explicit `--session` with `--restore` or `--profile` only when browser state should persist deliberately.
+
 ## Structure
 
 `index.ts` composes small feature modules:
 
+- `features/agent-browser.ts` — pinned CLI environment, dynamic skill, session isolation, and cleanup
+- `skills/agent-browser/SKILL.md` — version-matched browser skill bootstrap
 - `features/env.ts` — dotenv loading and `/env`
 - `features/footer.ts` — custom session footer
 - `features/codex-fast.ts` — guarded, session-persisted Codex Fast mode
@@ -133,6 +148,7 @@ Do not pass `--cwd`: Herdr runs the command from the plugin root, where `board.j
 - `features/todos.ts` — canonical Todo/Idea tools, commands, guidance, and legacy migration
 - `features/herdr-todos.ts` — Herdr board lifecycle, visibility, metadata, and `/todos`
 - `features/mru.ts` — slash-command recency and editor integration
+- `features/turn-stamp.ts` — final-response completion timestamps in the transcript
 - `herdr/todos/board.js` — interactive Herdr board
 - `herdr/todos/work-item-store.js` — unified persistence, lifecycle transitions, provenance, and legacy migration
 - `herdr/todos/view-state.js` — session-local board view state
