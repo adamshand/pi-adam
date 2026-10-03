@@ -8,6 +8,7 @@ import { registerHerdrSessionNameFeature } from "./features/herdr-session-name.t
 import { registerHerdrTodosFeature } from "./features/herdr-todos.ts";
 import { registerMruFeature } from "./features/mru.ts";
 import { registerTodosFeature } from "./features/todos.ts";
+import { registerTimersFeature } from "./features/timers.ts";
 import { registerTurnStampFeature } from "./features/turn-stamp.ts";
 
 export default function piAdam(pi: ExtensionAPI): void {
@@ -21,4 +22,5 @@ export default function piAdam(pi: ExtensionAPI): void {
 	registerHerdrTodosFeature(pi);
 	registerMruFeature(pi);
 	registerTurnStampFeature(pi);
+	registerTimersFeature(pi);
 }

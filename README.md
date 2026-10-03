@@ -19,6 +19,25 @@ Personal pi quality-of-life extension.
 - Inside Herdr, Pi `/name` values automatically rename the tab and appear in the agents panel.
 - Herdr agent rows can show each Pi pane's Git branch, working-tree changes, and upstream divergence through custom metadata tokens.
 - The work ledger keeps current-session Todos visible in a Herdr pane while retaining project-wide Ideas for later.
+- One-shot session timers wake the agent without polling, surviving reload and session resume.
+
+## Timers
+
+The agent-facing `timer` tool schedules a wake-up and returns immediately:
+
+```js
+timer({ action: "set", after: "33m", message: "Check that the token has expired." })
+timer({ action: "set", at: "2026-10-03T11:13:00Z", message: "Resume the test." })
+timer({ action: "set", at: "2026-10-03T21:33:00+13:00", message: "Resume at NZDT time." })
+timer({ action: "list" })
+timer({ action: "cancel", id: "<timer-id>" })
+```
+
+Durations accept `s`, `m`, `h`, or `d`, including decimals. Absolute times require a full date, seconds, and `Z` or an explicit UTC offset; invalid or past deadlines are rejected. The agent should finish its turn after scheduling rather than poll. A wake-up triggers a new turn when idle or queues a follow-up when busy, carrying the saved instructions and scheduled/actual times. Timers due together are delivered together.
+
+Use `/timers` to inspect pending timers, `/timers cancel <id>` to cancel one, or `/timers cancel all` to cancel every pending timer. Timers belong to the session across conversation branches; cancellation or firing is not undone by tree navigation. Reload restores deadlines. Closing or switching sessions clears live callbacks; resuming the original session delivers overdue timers once.
+
+Pi must remain running for on-time delivery. Timers do not launch Pi or wake a sleeping computer, and print-mode invocations should not be used as background schedulers. No model requests are made while waiting by the timer feature. Pending timers are consumed before queuing a wake-up to avoid duplicate delivery; a process crash during dispatch can lose that wake-up.
 
 ## Herdr agent metadata
 
@@ -149,6 +168,7 @@ Use an explicit `--session` with `--restore` or `--profile` only when browser st
 - `features/herdr-todos.ts` — Herdr board lifecycle, visibility, metadata, and `/todos`
 - `features/mru.ts` — slash-command recency and editor integration
 - `features/turn-stamp.ts` — final-response completion timestamps in the transcript
+- `features/timers.ts` — persistent one-shot agent wake-ups, `timer`, and `/timers`
 - `herdr/todos/board.js` — interactive Herdr board
 - `herdr/todos/work-item-store.js` — unified persistence, lifecycle transitions, provenance, and legacy migration
 - `herdr/todos/view-state.js` — session-local board view state
