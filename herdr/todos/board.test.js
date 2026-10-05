@@ -65,7 +65,7 @@ test("wrapped overview and focused details use the compact canonical footer", as
 		createdInSessionId: "origin-session",
 		intent: "Keep this concise context visible on demand.",
 		progress: "One result remains.",
-		checklist: [{ text: "First result", done: true }, { text: "Remaining result", done: false }],
+		checklist: [{ text: "Delivery", items: [{ text: "First result", done: true }, { text: "Remaining result", done: false }] }],
 		status: "in_progress",
 		createdAt: "1",
 	});
@@ -78,6 +78,7 @@ test("wrapped overview and focused details use the compact canonical footer", as
 		assert.match(rawScreen(), new RegExp(`${ESCAPE_CHARACTER}\\[32m█+`));
 		assert.match(rawScreen(), new RegExp(`${ESCAPE_CHARACTER}\\[33m█+`));
 		assert.match(rawScreen(), new RegExp(`${ESCAPE_CHARACTER}\\[90m█+`));
+		assert.ok(screen().includes("[1/2] Deliver a useful"), "overview did not show recursive checklist progress");
 		assert.ok(screen().includes("across the") && screen().includes("narrow board width"));
 		assert.ok(screen().includes("[?] help  [alt-t] show/hide"));
 		assert.ok(!screen().includes("refresh") && !screen().includes("↑↓") && !screen().includes("[k]kind"));

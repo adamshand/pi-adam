@@ -1,6 +1,8 @@
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type, type Static, type TSchema } from "typebox";
 import { Parse } from "typebox/value";
+import { sanitizeDiagnosticError } from "./diagnostics.ts";
 
 const RateLimitWindowSchema = Type.Object({
 	used_percent: Type.Optional(Type.Number()),
@@ -38,7 +40,42 @@ export type CodexUsageSnapshot = {
 	availableResets?: number;
 };
 
-const REFRESH_MS = 2 * 60 * 1000;
+export type CodexUsageStatusName = "idle" | "loading" | "ready" | "stale" | "error" | "ineligible";
+
+export type CodexUsageState = {
+	snapshot?: CodexUsageSnapshot;
+	status: CodexUsageStatusName;
+	eligible: boolean;
+	modelKey: string;
+	lastAttemptAt?: number;
+	lastSuccessAt?: number;
+	lastError?: string;
+};
+
+export type CodexUsageFeature = {
+	getState(): CodexUsageState;
+	refresh(ctx: ExtensionContext, options?: CodexUsageRefreshOptions): Promise<void>;
+};
+
+export type CodexUsageRefreshOptions = {
+	force?: boolean;
+	notify?: boolean;
+};
+
+type UsageRefreshRequest = {
+	ctx: ExtensionContext;
+	generation: number;
+	force: boolean;
+	notify: boolean;
+};
+
+type RefreshLoop = {
+	generation: number;
+	promise: Promise<void>;
+};
+
+export const CODEX_USAGE_REFRESH_MS = 2 * 60 * 1000;
+const STALE_AFTER_MS = CODEX_USAGE_REFRESH_MS * 2;
 const API_BASE = "https://chatgpt.com/backend-api/wham";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
 
@@ -62,10 +99,33 @@ function getAccountIdFromJwt(accessToken: string): string | undefined {
 	}
 }
 
+function waitForSignal<Value>(operation: Promise<Value>, signal: AbortSignal): Promise<Value> {
+	if (signal.aborted) return Promise.reject(signal.reason ?? new Error("Operation was aborted."));
+	return new Promise<Value>((resolve, reject) => {
+		const onAbort = () => {
+			cleanup();
+			reject(signal.reason ?? new Error("Operation was aborted."));
+		};
+		const cleanup = () => signal.removeEventListener("abort", onAbort);
+		signal.addEventListener("abort", onAbort, { once: true });
+		void operation.then(
+			(value) => {
+				cleanup();
+				resolve(value);
+			},
+			() => {
+				cleanup();
+				reject(new Error("Codex credential lookup failed."));
+			},
+		);
+	});
+}
+
 async function getJson<Schema extends TSchema>(
 	schema: Schema,
 	path: string,
 	accessToken: string,
+	signal: AbortSignal,
 	accountId?: string,
 ): Promise<Static<Schema>> {
 	const headers = new Headers({
@@ -75,12 +135,18 @@ async function getJson<Schema extends TSchema>(
 	});
 	if (accountId) headers.set("ChatGPT-Account-Id", accountId);
 
-	const response = await fetch(`${API_BASE}/${path}`, {
-		headers,
-		signal: AbortSignal.timeout(10_000),
-	});
+	const response = await fetch(`${API_BASE}/${path}`, { headers, signal });
 	if (!response.ok) throw new Error(`Codex ${path} fetch failed (${response.status})`);
 	return Parse(schema, await response.json());
+}
+
+export function isCodexUsageEligible(ctx: Pick<ExtensionContext, "model" | "modelRegistry">): boolean {
+	const model = ctx.model;
+	return model?.provider === "openai-codex" && ctx.modelRegistry.isUsingOAuth(model);
+}
+
+function modelKey(model: Model<Api> | undefined): string {
+	return model ? `${model.provider}/${model.id}` : "none";
 }
 
 export function snapshotFromRateLimit(rateLimit: RateLimit | undefined): CodexUsageSnapshot {
@@ -109,13 +175,13 @@ export function snapshotFromRateLimit(rateLimit: RateLimit | undefined): CodexUs
 	};
 }
 
-async function loadSnapshot(ctx: ExtensionContext): Promise<CodexUsageSnapshot> {
-	const accessToken = await ctx.modelRegistry.getApiKeyForProvider("openai-codex");
+async function loadSnapshot(ctx: ExtensionContext, signal: AbortSignal): Promise<CodexUsageSnapshot> {
+	const accessToken = await waitForSignal(ctx.modelRegistry.getApiKeyForProvider("openai-codex"), signal);
 	if (!accessToken) throw new Error('No Pi auth found for provider "openai-codex". Use /login first.');
 	const accountId = getAccountIdFromJwt(accessToken);
 	const [usageResult, creditsResult] = await Promise.allSettled([
-		getJson(CodexUsageResponseSchema, "usage", accessToken, accountId),
-		getJson(ResetCreditsResponseSchema, "rate-limit-reset-credits", accessToken, accountId),
+		getJson(CodexUsageResponseSchema, "usage", accessToken, signal, accountId),
+		getJson(ResetCreditsResponseSchema, "rate-limit-reset-credits", accessToken, signal, accountId),
 	]);
 	if (usageResult.status === "rejected") throw usageResult.reason;
 
@@ -137,58 +203,192 @@ export function formatReset(epochSeconds: number | undefined): string | undefine
 	return `${minutes}m`;
 }
 
-export function registerCodexUsageFeature(pi: ExtensionAPI, onChange: () => void): () => CodexUsageSnapshot | undefined {
-	let intervalId: ReturnType<typeof setInterval> | undefined;
-	let snapshot: CodexUsageSnapshot | undefined;
-	let lastError: string | undefined;
+function detailedUsage(snapshot: CodexUsageSnapshot): string[] {
+	const parts: string[] = [];
+	if (snapshot.fiveHourUsed !== undefined) parts.push(`5h ${Math.round(snapshot.fiveHourUsed)}% used`);
+	if (snapshot.weeklyUsed !== undefined) parts.push(`weekly ${Math.round(snapshot.weeklyUsed)}% used`);
+	const fiveHourReset = formatReset(snapshot.fiveHourResetAt);
+	const weeklyReset = formatReset(snapshot.weeklyResetAt);
+	if (fiveHourReset) parts.push(`5h resets in ${fiveHourReset}`);
+	if (weeklyReset) parts.push(`weekly resets in ${weeklyReset}`);
+	if (snapshot.availableResets !== undefined) parts.push(`${snapshot.availableResets} banked reset${snapshot.availableResets === 1 ? "" : "s"}`);
+	return parts;
+}
 
-	const refresh = async (ctx: ExtensionContext, notify = false) => {
-		try {
-			snapshot = await loadSnapshot(ctx);
-			lastError = undefined;
-			onChange();
-			if (notify) ctx.ui.notify("Codex usage refreshed", "info");
-		} catch (error) {
-			lastError = error instanceof Error ? error.message : String(error);
-			if (notify) ctx.ui.notify(lastError, "error");
+function mergeRefreshRequest(current: UsageRefreshRequest | undefined, next: UsageRefreshRequest): UsageRefreshRequest {
+	if (!current || current.generation !== next.generation) return next;
+	return {
+		ctx: next.ctx,
+		generation: next.generation,
+		force: current.force || next.force,
+		notify: current.notify || next.notify,
+	};
+}
+
+export function registerCodexUsageFeature(pi: ExtensionAPI, onChange: () => void): CodexUsageFeature {
+	let intervalId: ReturnType<typeof setInterval> | undefined;
+	let lifecycleAbortController: AbortController | undefined;
+	let generation = 0;
+	let refreshLoop: RefreshLoop | undefined;
+	let queuedRefresh: UsageRefreshRequest | undefined;
+	let state: CodexUsageState = { status: "idle", eligible: false, modelKey: "none" };
+
+	const currentState = (): CodexUsageState => {
+		if (state.status === "ready" && state.lastSuccessAt && Date.now() - state.lastSuccessAt > STALE_AFTER_MS) {
+			return { ...state, status: "stale" };
 		}
+		return { ...state };
+	};
+
+	const stop = () => {
+		generation += 1;
+		lifecycleAbortController?.abort(new Error("Codex usage lifecycle ended."));
+		lifecycleAbortController = undefined;
+		queuedRefresh = undefined;
+		if (intervalId) clearInterval(intervalId);
+		intervalId = undefined;
+	};
+
+	const performRefresh = async (request: UsageRefreshRequest) => {
+		if (request.generation !== generation) return;
+		const eligible = isCodexUsageEligible(request.ctx);
+		const key = modelKey(request.ctx.model);
+		if (!eligible) {
+			state = { status: "ineligible", eligible: false, modelKey: key };
+			onChange();
+			if (request.notify) request.ctx.ui.notify("Codex usage requires an openai-codex model using ChatGPT OAuth.", "warning");
+			return;
+		}
+		const now = Date.now();
+		if (!request.force && state.lastAttemptAt && now - state.lastAttemptAt < CODEX_USAGE_REFRESH_MS) return;
+
+		const lifecycleSignal = lifecycleAbortController?.signal;
+		if (!lifecycleSignal) {
+			const lastError = "Codex usage lifecycle is inactive.";
+			state = {
+				...state,
+				status: state.snapshot ? "stale" : "error",
+				eligible: true,
+				modelKey: key,
+				lastAttemptAt: now,
+				lastError,
+			};
+			onChange();
+			if (request.notify) request.ctx.ui.notify(lastError, "error");
+			return;
+		}
+		state = { ...state, status: "loading", eligible: true, modelKey: key, lastAttemptAt: now };
+		onChange();
+		const signal = AbortSignal.any([lifecycleSignal, AbortSignal.timeout(10_000)]);
+		try {
+			const snapshot = await loadSnapshot(request.ctx, signal);
+			if (request.generation !== generation || lifecycleSignal.aborted) return;
+			state = {
+				snapshot,
+				status: "ready",
+				eligible: true,
+				modelKey: key,
+				lastAttemptAt: now,
+				lastSuccessAt: Date.now(),
+			};
+			onChange();
+			if (request.notify) request.ctx.ui.notify("Codex usage refreshed", "info");
+		} catch (error) {
+			if (request.generation !== generation || lifecycleSignal.aborted) return;
+			const lastError = sanitizeDiagnosticError(error instanceof Error ? error.message : String(error));
+			state = {
+				...state,
+				status: state.snapshot ? "stale" : "error",
+				eligible: true,
+				modelKey: key,
+				lastAttemptAt: now,
+				lastError,
+			};
+			onChange();
+			if (request.notify) request.ctx.ui.notify(lastError, "error");
+		}
+	};
+
+	const drainRefreshes = async (first: UsageRefreshRequest) => {
+		let request: UsageRefreshRequest | undefined = first;
+		while (request) {
+			await performRefresh(request);
+			const next: UsageRefreshRequest | undefined = queuedRefresh?.generation === request.generation ? queuedRefresh : undefined;
+			if (next) queuedRefresh = undefined;
+			request = next;
+		}
+	};
+
+	const refresh = (ctx: ExtensionContext, options: CodexUsageRefreshOptions = {}): Promise<void> => {
+		const request: UsageRefreshRequest = {
+			ctx,
+			generation,
+			force: options.force ?? false,
+			notify: options.notify ?? false,
+		};
+		if (refreshLoop?.generation === generation) {
+			queuedRefresh = mergeRefreshRequest(queuedRefresh, request);
+			return refreshLoop.promise;
+		}
+		const promise = drainRefreshes(request).finally(() => {
+			if (refreshLoop?.promise === promise) refreshLoop = undefined;
+		});
+		refreshLoop = { generation, promise };
+		return promise;
+	};
+
+	const start = async (ctx: ExtensionContext) => {
+		stop();
+		lifecycleAbortController = new AbortController();
+		const activeGeneration = generation;
+		const eligible = isCodexUsageEligible(ctx);
+		state = eligible
+			? { ...state, status: "idle", eligible: true, modelKey: modelKey(ctx.model), lastError: undefined }
+			: { status: "ineligible", eligible: false, modelKey: modelKey(ctx.model) };
+		onChange();
+		if (eligible) await refresh(ctx, { force: true });
+		if (activeGeneration !== generation || !eligible) return;
+		intervalId = setInterval(() => void refresh(ctx), CODEX_USAGE_REFRESH_MS);
+		intervalId.unref?.();
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
-		await refresh(ctx);
-		intervalId = setInterval(() => void refresh(ctx), REFRESH_MS);
+		await start(ctx);
+	});
+
+	pi.on("model_select", (_event, ctx) => {
+		if (ctx.mode !== "tui") return;
+		void start(ctx);
 	});
 
 	pi.on("session_shutdown", () => {
-		if (intervalId) clearInterval(intervalId);
-		intervalId = undefined;
+		stop();
+		state = { status: "idle", eligible: false, modelKey: state.modelKey };
 	});
 
 	pi.registerCommand("codex-usage", {
 		description: "Show current Codex 5-hour/weekly usage and banked reset availability",
 		handler: async (_args, ctx) => {
-			await refresh(ctx);
-			if (!snapshot) {
-				ctx.ui.notify(lastError ?? "Codex usage unavailable", "error");
+			await refresh(ctx, { force: true });
+			const current = currentState();
+			if (!current.eligible) {
+				ctx.ui.notify("Codex usage requires an openai-codex model using ChatGPT OAuth.", "warning");
 				return;
 			}
-			const parts: string[] = [];
-			if (snapshot.fiveHourUsed !== undefined) parts.push(`5h ${Math.round(snapshot.fiveHourUsed)}% used`);
-			if (snapshot.weeklyUsed !== undefined) parts.push(`weekly ${Math.round(snapshot.weeklyUsed)}% used`);
-			const fiveHourReset = formatReset(snapshot.fiveHourResetAt);
-			const weeklyReset = formatReset(snapshot.weeklyResetAt);
-			if (fiveHourReset) parts.push(`5h resets in ${fiveHourReset}`);
-			if (weeklyReset) parts.push(`weekly resets in ${weeklyReset}`);
-			if (snapshot.availableResets !== undefined) parts.push(`${snapshot.availableResets} banked reset${snapshot.availableResets === 1 ? "" : "s"}`);
-			ctx.ui.notify(`Codex: ${parts.join(" • ")}`, "info");
+			if (!current.snapshot) {
+				ctx.ui.notify(current.lastError ?? "Codex usage unavailable", "error");
+				return;
+			}
+			const freshness = current.status === "stale" ? ` • stale${current.lastError ? `: ${current.lastError}` : ""}` : "";
+			ctx.ui.notify(`Codex: ${detailedUsage(current.snapshot).join(" • ")}${freshness}`, current.status === "stale" ? "warning" : "info");
 		},
 	});
 
 	pi.registerCommand("codex-usage-refresh", {
 		description: "Refresh Codex usage now",
-		handler: async (_args, ctx) => refresh(ctx, true),
+		handler: async (_args, ctx) => refresh(ctx, { force: true, notify: true }),
 	});
 
-	return () => snapshot;
+	return { getState: currentState, refresh };
 }

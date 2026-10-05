@@ -1,10 +1,12 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { isCodexModel, registerCodexFastFeature } from "./codex-fast.ts";
+import { isCodexImageModel } from "./codex-image.ts";
 import { registerCodexUsageFeature } from "./codex-usage.ts";
 import { centeredFooter, readFooterGitStats, type FooterGitStats } from "./footer-git.ts";
 
 type Rgb = readonly [red: number, green: number, blue: number];
+type ContextUsage = ReturnType<ExtensionContext["getContextUsage"]>;
 
 type FooterPalette = {
 	primary: Rgb;
@@ -12,6 +14,13 @@ type FooterPalette = {
 	warning: Rgb;
 	error: Rgb;
 	thinking: Record<"low" | "medium" | "high" | "xhigh" | "max", Rgb>;
+};
+
+type FooterMetrics = {
+	cost: number;
+	contextUsage: ContextUsage;
+	costUpdatedAt?: number;
+	contextUpdatedAt?: number;
 };
 
 // Flexoki by Steph Ango (MIT): https://stephango.com/flexoki
@@ -64,6 +73,18 @@ function styleThinkingLevel(theme: Theme, palette: FooterPalette, level: string)
 	return colorize(palette.primary, level);
 }
 
+function branchCost(ctx: ExtensionContext): number {
+	let cost = 0;
+	for (const entry of ctx.sessionManager.getBranch()) {
+		if (entry.type === "message" && entry.message.role === "assistant") cost += entry.message.usage.cost.total;
+	}
+	return cost;
+}
+
+function formatTimestamp(value: number | undefined): string {
+	return value ? new Date(value).toLocaleTimeString() : "never";
+}
+
 export function registerFooterFeature(pi: ExtensionAPI): void {
 	let footerInstalled = false;
 	let gitStats: FooterGitStats | undefined;
@@ -82,35 +103,110 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 		requestFooterRender?.();
 	};
 	let thinkingLevel = "high";
+	let lastSpeed: number | undefined;
+	let assistantStartTime: number | undefined;
 	let requestFooterRender: (() => void) | undefined;
+	let metrics: FooterMetrics = { cost: 0, contextUsage: undefined };
 	const requestRender = () => requestFooterRender?.();
 	const getCodexFast = registerCodexFastFeature(pi, requestRender);
-	const getCodexUsage = registerCodexUsageFeature(pi, requestRender);
+	const codexUsage = registerCodexUsageFeature(pi, requestRender);
+
+	const refreshCost = (ctx: ExtensionContext) => {
+		metrics = { ...metrics, cost: branchCost(ctx), costUpdatedAt: Date.now() };
+	};
+	const refreshContext = (ctx: ExtensionContext) => {
+		metrics = { ...metrics, contextUsage: ctx.getContextUsage(), contextUpdatedAt: Date.now() };
+	};
+	const refreshMetrics = (ctx: ExtensionContext) => {
+		refreshCost(ctx);
+		refreshContext(ctx);
+	};
+
+	pi.registerCommand("pi-adam-status", {
+		description: "Show pi-adam model, Fast, usage, image, and footer diagnostics",
+		handler: async (_args, ctx) => {
+			refreshMetrics(ctx);
+			const fast = getCodexFast();
+			const usage = codexUsage.getState();
+			const context = metrics.contextUsage;
+			const contextLimit = context?.contextWindow ?? ctx.model?.contextWindow ?? 0;
+			const contextTokens = context?.tokens ?? 0;
+			const contextPercent = contextLimit > 0 ? `${((contextTokens / contextLimit) * 100).toFixed(1)}%` : "unavailable";
+			ctx.ui.notify([
+				`Model: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none"}`,
+				`Thinking: ${thinkingLevel}`,
+				`Fast: ${fast.enabled ? "requested" : "off"} · ${fast.eligible ? "eligible" : "ineligible"}`,
+				`Fast last injection: ${formatTimestamp(fast.lastInjectedAt)}${fast.lastInjectedModel ? ` · ${fast.lastInjectedModel}` : ""}`,
+				`Usage: ${usage.status} · last attempt ${formatTimestamp(usage.lastAttemptAt)} · last success ${formatTimestamp(usage.lastSuccessAt)}`,
+				`Usage error: ${usage.lastError ?? "none"}`,
+				`Image tool: ${isCodexImageModel(ctx.model) ? "eligible" : "ineligible"}`,
+				`Footer cost: $${metrics.cost.toFixed(2)} · refreshed ${formatTimestamp(metrics.costUpdatedAt)}`,
+				`Context: ${contextTokens}/${contextLimit || "?"} (${contextPercent}) · refreshed ${formatTimestamp(metrics.contextUpdatedAt)}`,
+			].join("\n"), "info");
+		},
+	});
 
 	pi.on("thinking_level_select", (event) => {
 		thinkingLevel = event.level;
 		requestFooterRender?.();
 	});
 
-	pi.on("model_select", () => {
+	pi.on("model_select", (_event, ctx) => {
+		refreshContext(ctx);
 		requestFooterRender?.();
 	});
 
-	pi.on("message_end", (event) => {
-		if (event.message.role === "assistant") requestFooterRender?.();
+	pi.on("message_start", (event) => {
+		if (event.message.role === "assistant") assistantStartTime = Date.now();
 	});
 
-	pi.on("turn_end", (_event, ctx) => {
-		void refreshGit(ctx);
+	pi.on("message_end", (event, ctx) => {
+		refreshContext(ctx);
+		if (event.message.role === "assistant") {
+			const elapsedSeconds = assistantStartTime ? (Date.now() - assistantStartTime) / 1000 : 0;
+			if (elapsedSeconds > 0.5 && event.message.usage.output > 0) {
+				lastSpeed = Math.round(event.message.usage.output / elapsedSeconds);
+			}
+			assistantStartTime = undefined;
+		}
+		requestFooterRender?.();
 	});
+
+	pi.on("turn_end", (event, ctx) => {
+		void refreshGit(ctx);
+		refreshContext(ctx);
+		if (event.message.role === "assistant") {
+			metrics = {
+				...metrics,
+				cost: metrics.cost + event.message.usage.cost.total,
+				costUpdatedAt: Date.now(),
+			};
+		}
+		requestFooterRender?.();
+	});
+
 	pi.on("agent_settled", (_event, ctx) => {
 		void refreshGit(ctx);
+		refreshContext(ctx);
+		requestFooterRender?.();
+	});
+
+	pi.on("session_compact", (_event, ctx) => {
+		refreshMetrics(ctx);
+		requestFooterRender?.();
+	});
+
+	pi.on("session_tree", (_event, ctx) => {
+		refreshMetrics(ctx);
+		requestFooterRender?.();
 	});
 
 	pi.on("session_start", (_event, ctx) => {
 		thinkingLevel = pi.getThinkingLevel();
+		lastSpeed = undefined;
+		assistantStartTime = undefined;
 		if (ctx.mode !== "tui") return;
-
+		refreshMetrics(ctx);
 		gitStats = undefined;
 		void refreshGit(ctx);
 
@@ -130,14 +226,7 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 				invalidate() {},
 				render(width: number): string[] {
 					const palette = getFooterPalette(theme);
-					let cost = 0;
-					for (const entry of ctx.sessionManager.getBranch()) {
-						if (entry.type === "message" && entry.message.role === "assistant") {
-							cost += entry.message.usage.cost.total;
-						}
-					}
-
-					const contextUsage = ctx.getContextUsage();
+					const contextUsage = metrics.contextUsage;
 					const ctxLimit = contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
 					const ctxTokens = contextUsage?.tokens ?? 0;
 					let contextPct = "";
@@ -148,42 +237,53 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 							+ (pct > 60 ? colorize(palette.error, value) : colorize(palette.primary, value));
 					}
 
-					const costStr = cost === 0
+					const speedStr = lastSpeed === undefined
+						? ""
+						: colorize(palette.primary, String(lastSpeed)) + theme.fg("dim", " t/s");
+					const costStr = metrics.cost === 0
 						? theme.fg("dim", "$0.00")
-						: theme.fg("dim", "$") + colorize(palette.primary, cost.toFixed(2));
+						: theme.fg("dim", "$") + colorize(palette.primary, metrics.cost.toFixed(2));
 					const showCodex = isCodexModel(ctx.model);
-					const codexUsage = getCodexUsage();
+					const usage = codexUsage.getState();
 					const colorizeCodexUsage = (used: number | undefined) => {
 						const text = used === undefined ? "?%" : `${Math.round(used)}%`;
 						if (used !== undefined && used > 90) return colorize(palette.error, text);
 						if (used !== undefined && used > 70) return colorize(palette.warning, text);
 						return colorize(palette.primary, text);
 					};
-					const codexStr = showCodex && codexUsage
+					const usageHealth = usage.status === "error"
+						? colorize(palette.error, "!")
+						: usage.status === "stale"
+							? colorize(palette.warning, "~")
+							: usage.status === "loading"
+								? theme.fg("dim", "…")
+								: "";
+					const codexStr = showCodex && usage.eligible && usage.snapshot
 						? [
-								codexUsage.fiveHourUsed !== undefined
-									? `${theme.fg("dim", "5h ")}${colorizeCodexUsage(codexUsage.fiveHourUsed)}`
-									: "",
-								codexUsage.weeklyUsed !== undefined
-									? `${theme.fg("dim", "wk ")}${colorizeCodexUsage(codexUsage.weeklyUsed)}`
-									: "",
-								codexUsage.availableResets !== undefined
-									? `${theme.fg("dim", "↺")}${colorize(palette.primary, String(codexUsage.availableResets))}`
-									: "",
-							].filter(Boolean).join(" ")
-						: "";
+							usage.snapshot.fiveHourUsed !== undefined
+								? `${theme.fg("dim", "5h ")}${colorizeCodexUsage(usage.snapshot.fiveHourUsed)}`
+								: "",
+							usage.snapshot.weeklyUsed !== undefined
+								? `${theme.fg("dim", "wk ")}${colorizeCodexUsage(usage.snapshot.weeklyUsed)}`
+								: "",
+							usage.snapshot.availableResets !== undefined
+								? `${theme.fg("dim", "↺")}${colorize(palette.primary, String(usage.snapshot.availableResets))}`
+								: "",
+							usageHealth,
+						].filter(Boolean).join(" ")
+						: showCodex && usageHealth ? `${theme.fg("dim", "usage ")}${usageHealth}` : "";
 
 					const modelStr = colorize(palette.primary, ctx.model?.id ?? "no-model");
 					const levelStr = styleThinkingLevel(theme, palette, thinkingLevel);
 					const fast = getCodexFast();
 					const fastStr = showCodex
 						? fast.enabled && fast.eligible
-							? colorize(palette.primary, "fast")
+							? colorize(palette.error, "fast")
 							: theme.fg("dim", "fast")
 						: undefined;
 					const divider = " " + colorize(palette.separator, "•") + " ";
 					const left = [modelStr, levelStr, fastStr].filter((part): part is string => part !== undefined).join(divider);
-					const right = [costStr, contextPct, codexStr].filter(Boolean).join(divider);
+					const right = [speedStr, costStr, contextPct, codexStr].filter(Boolean).join(divider);
 					const git = gitStats;
 					const center = git ? [
 						git.added ? colorize(palette.primary, `+${git.added}`) : "",
@@ -226,6 +326,9 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 		footerInstalled = false;
 		gitRevision += 1;
 		gitStats = undefined;
+		lastSpeed = undefined;
+		assistantStartTime = undefined;
 		requestFooterRender = undefined;
+		metrics = { cost: 0, contextUsage: undefined };
 	});
 }

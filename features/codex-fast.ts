@@ -29,6 +29,8 @@ type ProviderRequestBody = Static<typeof ProviderRequestBodySchema>;
 export type CodexFastSnapshot = {
 	enabled: boolean;
 	eligible: boolean;
+	lastInjectedAt?: number;
+	lastInjectedModel?: string;
 };
 
 type CodexFastEligibilityContext = {
@@ -63,10 +65,14 @@ export function registerCodexFastFeature(
 ): () => CodexFastSnapshot {
 	let enabled = false;
 	let currentCtx: ExtensionContext | undefined;
+	let lastInjectedAt: number | undefined;
+	let lastInjectedModel: string | undefined;
 
 	const snapshot = (): CodexFastSnapshot => ({
 		enabled,
 		eligible: currentCtx ? isCodexFastEligible(currentCtx) : false,
+		lastInjectedAt,
+		lastInjectedModel,
 	});
 
 	const restore = (ctx: ExtensionContext) => {
@@ -107,11 +113,19 @@ export function registerCodexFastFeature(
 	pi.on("before_provider_request", (event, ctx) => {
 		currentCtx = ctx;
 		if (!enabled || !isCodexFastEligible(ctx) || !Check(ProviderRequestBodySchema, event.payload)) return;
-		return applyCodexFastTier(event.payload, enabled, true);
+		const hadServiceTier = event.payload.service_tier !== undefined;
+		const payload = applyCodexFastTier(event.payload, enabled, true);
+		if (!hadServiceTier && payload.service_tier === FAST_TIER) {
+			lastInjectedAt = Date.now();
+			lastInjectedModel = `${ctx.model?.provider}/${ctx.model?.id}`;
+		}
+		return payload;
 	});
 
 	pi.on("session_start", (_event, ctx) => {
 		currentCtx = ctx;
+		lastInjectedAt = undefined;
+		lastInjectedModel = undefined;
 		restore(ctx);
 		onChange();
 	});

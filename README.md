@@ -10,10 +10,12 @@ Personal pi quality-of-life extension.
 - `codex_image` generates and saves images through Codex's native `gpt-image-2` hosted tool.
 - Bundles a pinned `agent-browser` CLI and loads its current core skill on demand for headless application testing.
 - Gives every Pi session isolated browser state, bounded output, and a 15-minute idle-cleanup backstop.
+- Adds Pi-specific orchestration guidance for parallel Luna scouts and fresh Kimi/Grok change reviews through `pi-subagents`.
 - Adds a dim, right-aligned local completion timestamp after each final settled agent response.
 - Loads dotenv-style variables from `~/.pi/env`, then trusted project `.pi/env` files. Existing shell variables take precedence.
 - `/env` lists variables declared by those files with values redacted.
 - `/codex-usage` shows Codex usage, reset times, and available banked resets; `/codex-usage-refresh` refreshes it immediately.
+- `/pi-adam-status` reports model, Fast injection, usage freshness/errors, image eligibility, footer cost, and context diagnostics.
 - Slash-command usage is stored in `state.json` next to this extension.
 - `/pi-adam-mru` shows the recent list; `/pi-adam-mru reset` clears it.
 - Inside Herdr, Pi `/name` values automatically rename the tab and appear in the agents panel.
@@ -156,19 +158,29 @@ Pi-adam closes an active owned browser during quit or session replacement while 
 
 Use an explicit `--session` with `--restore` or `--profile` only when browser state should persist deliberately.
 
+## Orchestration
+
+The `orchestrate` skill complements the pinned user-level `pi-subagents` package. Substantive tasks can fan out up to three fresh, read-only Luna scouts before implementation. After meaningful code changes and local checks, the coordinator runs independent fresh-context Kimi and Grok reviewers in parallel, verifies their findings, and keeps implementation and approvals in the parent session.
+
+Children cannot delegate, ambient extensions are disabled, and run artifacts stay in Pi's session storage. The orchestration policy does not use writing workers during the initial experiment; the automatic watchdog, schedules, and `pi-intercom` remain disabled.
+
+Use `/review-changes <goal and acceptance criteria>` to request the dual review explicitly.
+
 ## Structure
 
 `index.ts` composes small feature modules:
 
 - `features/agent-browser.ts` — pinned CLI environment, dynamic skill, session isolation, and cleanup
 - `skills/agent-browser/SKILL.md` — version-matched browser skill bootstrap
+- `skills/orchestrate/SKILL.md` — bounded scout and dual-review coordination policy
 - `features/compaction.ts` — agent-requested compaction at a completed-run boundary
 - `features/env.ts` — dotenv loading and `/env`
 - `features/footer.ts` — custom session footer
 - `features/codex-fast.ts` — guarded, session-persisted Codex Fast mode
 - `features/codex-image.ts` — Codex-hosted image generation and file saving
-- `features/codex-image-utils.ts` — image payload and SSE parsing helpers
-- `features/codex-usage.ts` — read-only Codex usage and banked-reset API integration
+- `features/codex-image-utils.ts` — completed-image payload and SSE parsing helpers
+- `features/codex-usage.ts` — lifecycle-safe Codex usage and banked-reset API integration
+- `features/diagnostics.ts` — bounded, secret-redacting provider diagnostics
 - `features/herdr-git-metadata.ts` — per-pane Git branch, working-tree, and upstream status for Herdr Agent tokens
 - `features/herdr-session-name.ts` — Pi `/name` synchronization with Herdr tab titles
 - `features/todos.ts` — canonical Todo/Idea tools, commands, guidance, and legacy migration

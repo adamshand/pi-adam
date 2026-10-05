@@ -47,21 +47,21 @@ function isProbablyBase64Image(value: string): boolean {
 	return stripped.length > 100 && /^[A-Za-z0-9+/=_-]+$/.test(stripped);
 }
 
-export function collectImageBase64(payload: JsonValue, images: string[] = []): string[] {
+export function collectCompletedImageBase64(payload: JsonValue, images: string[] = []): string[] {
 	if (Array.isArray(payload)) {
-		for (const item of payload) collectImageBase64(item, images);
+		for (const item of payload) collectCompletedImageBase64(item, images);
 		return [...new Set(images)];
 	}
 	if (!isJsonObject(payload)) return images;
 
-	if (payload.type === "image_generation_call" && isString(payload.result)) {
-		images.push(stripDataUrl(payload.result));
+	const isCompletedImage = payload.type === "image_generation_call" && payload.status === "completed";
+	if (isCompletedImage) {
+		for (const key of ["result", "b64_json"] as const) {
+			const value = payload[key];
+			if (isString(value) && isProbablyBase64Image(value)) images.push(stripDataUrl(value));
+		}
 	}
-	for (const key of ["partial_image_b64", "b64_json", "image_base64", "base64", "data", "result"] as const) {
-		const value = payload[key];
-		if (isString(value) && isProbablyBase64Image(value)) images.push(stripDataUrl(value));
-	}
-	for (const value of Object.values(payload)) collectImageBase64(value, images);
+	for (const value of Object.values(payload)) collectCompletedImageBase64(value, images);
 	return [...new Set(images)];
 }
 
@@ -88,9 +88,9 @@ export function detectImageMimeType(base64: string): ImageFormat {
 
 export function parseSseDataBlocks(text: string): JsonValue[] {
 	const events: JsonValue[] = [];
-	for (const block of text.split(/\n\n+/)) {
+	for (const block of text.split(/\r?\n\r?\n+/)) {
 		const data = block
-			.split("\n")
+			.split(/\r?\n/)
 			.filter((line) => line.startsWith("data:"))
 			.map((line) => line.slice("data:".length).trim())
 			.join("\n");

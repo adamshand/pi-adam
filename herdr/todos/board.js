@@ -133,9 +133,14 @@ function ensureSelection(items) {
 }
 
 function overviewBlock(item, width, selected) {
-	const titleLines = wrapText(item.title, Math.max(4, width - 4));
+	const progress = item.kind === "todo" && item.checklist.length > 0 ? checklistProgress(item.checklist) : undefined;
+	const progressLabel = progress ? `[${progress.done}/${progress.total}]` : "";
+	const prefixWidth = progressLabel ? progressLabel.length + 4 : 3;
+	const titleLines = wrapText(item.title, Math.max(4, width - prefixWidth - 1));
 	return titleLines.map((line, index) => {
-		const prefix = index === 0 ? ` ${statusIcon(item)} ` : "   ";
+		const prefix = index === 0
+			? ` ${statusIcon(item)} ${progressLabel ? `${ansi.dim}${progressLabel}${ansi.reset} ` : ""}`
+			: " ".repeat(prefixWidth);
 		const title = selected ? `${ansi.reverse}${line}${ansi.reset}` : line;
 		return { text: `${prefix}${title}`, first: index === 0 };
 	});

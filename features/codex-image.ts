@@ -8,7 +8,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
 import {
-	collectImageBase64,
+	collectCompletedImageBase64,
 	detectImageMimeType,
 	extractResponseId,
 	type JsonValue,
@@ -17,6 +17,7 @@ import {
 	resolveResponsesUrl,
 	stripDataUrl,
 } from "./codex-image-utils.ts";
+import { sanitizeDiagnosticError } from "./diagnostics.ts";
 
 const TOOL_NAME = "codex_image";
 const CODEX_PROVIDER = "openai-codex";
@@ -45,7 +46,8 @@ const GenerateImageParams = Type.Object({
 	}),
 });
 
-type GenerateImageParamsType = Static<typeof GenerateImageParams>;
+export type GenerateImageParamsType = Static<typeof GenerateImageParams>;
+type ImageSaveContext = Pick<ExtensionContext, "cwd">;
 
 type GenerateImageDetails = {
 	model: string;
@@ -62,6 +64,10 @@ type SavedImage = {
 	mimeType: string;
 	base64: string;
 };
+
+export function formatImageGenerationError(status: number, responseBody: string): string {
+	return `Image generation failed (${status}): ${sanitizeDiagnosticError(responseBody, 300)}`;
+}
 
 export function isCodexImageModel(model: Model<Api> | undefined): model is Model<"openai-codex-responses"> {
 	return model?.provider === CODEX_PROVIDER
@@ -88,11 +94,15 @@ function extractChatGptAccountId(token: string): string | undefined {
 	}
 }
 
-async function buildHeaders(ctx: ExtensionContext, model: Model<Api>): Promise<Headers> {
+export async function buildHeaders(ctx: ExtensionContext, model: Model<Api>): Promise<Headers> {
 	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-	if (!auth.ok) throw new Error(auth.error);
+	if (!auth.ok) throw new Error(sanitizeDiagnosticError(auth.error));
 
-	const headers = new Headers(auth.headers);
+	const headers = new Headers();
+	for (const [name, value] of Object.entries(auth.headers ?? {})) {
+		if (value === null) headers.delete(name);
+		else headers.set(name, value);
+	}
 	headers.set("content-type", "application/json");
 	headers.set("accept", "text/event-stream, application/json");
 	if (auth.apiKey && !hasHeader(headers, "authorization")) {
@@ -125,12 +135,12 @@ function buildRequestBody(model: Model<Api>, params: GenerateImageParamsType) {
 	};
 }
 
-function resolveTargetPath(ctx: ExtensionContext, params: GenerateImageParamsType): string {
+function resolveTargetPath(ctx: ImageSaveContext, params: GenerateImageParamsType): string {
 	const targetPath = params["target-path"] || DEFAULT_TARGET_PATH;
 	return isAbsolute(targetPath) ? targetPath : resolve(ctx.cwd, targetPath);
 }
 
-async function saveImageToTarget(ctx: ExtensionContext, base64: string, params: GenerateImageParamsType): Promise<SavedImage> {
+async function saveImageToTarget(ctx: ImageSaveContext, base64: string, params: GenerateImageParamsType): Promise<SavedImage> {
 	const cleanBase64 = stripDataUrl(base64);
 	const { mimeType, extension } = detectImageMimeType(cleanBase64);
 	const targetPath = resolveTargetPath(ctx, params);
@@ -140,15 +150,15 @@ async function saveImageToTarget(ctx: ExtensionContext, base64: string, params: 
 	return { outputPath, mimeType, base64: cleanBase64 };
 }
 
-async function readImageResponseAndSave(
+export async function readImageResponseAndSave(
 	response: Response,
-	ctx: ExtensionContext,
+	ctx: ImageSaveContext,
 	params: GenerateImageParamsType,
 	onSaved?: (saved: SavedImage) => void,
 ): Promise<{ payload: JsonValue; saved: SavedImage }> {
 	const saveFirst = async (payload: JsonValue, label: string) => {
-		const imageBase64 = collectImageBase64(payload)[0];
-		if (!imageBase64) throw new Error(`${label} did not contain base64 image data: ${JSON.stringify(payload).slice(0, 1000)}`);
+		const imageBase64 = collectCompletedImageBase64(payload)[0];
+		if (!imageBase64) throw new Error(`${label} did not contain a completed image generation result.`);
 		const saved = await saveImageToTarget(ctx, imageBase64, params);
 		onSaved?.(saved);
 		return saved;
@@ -172,13 +182,13 @@ async function readImageResponseAndSave(
 	const processChunk = async (chunk: string) => {
 		fullText += chunk;
 		buffer += chunk;
-		const blocks = buffer.split(/\n\n+/);
+		const blocks = buffer.split(/\r?\n\r?\n+/);
 		buffer = blocks.pop() ?? "";
 		for (const block of blocks) {
 			for (const event of parseSseDataBlocks(block)) {
 				events.push(event);
 				if (saved) continue;
-				const imageBase64 = collectImageBase64(event)[0];
+				const imageBase64 = collectCompletedImageBase64(event)[0];
 				if (imageBase64) {
 					saved = await saveImageToTarget(ctx, imageBase64, params);
 					onSaved?.(saved);
@@ -200,7 +210,7 @@ async function readImageResponseAndSave(
 		try {
 			payload = Parse(JsonValueSchema, JSON.parse(fullText));
 		} catch {
-			throw new Error(`Expected JSON or SSE response but received: ${fullText.slice(0, 500)}`);
+			throw new Error(`Expected JSON or SSE image response: ${sanitizeDiagnosticError(fullText, 300)}`);
 		}
 		return { payload, saved: await saveFirst(payload, "Image generation response") };
 	}
@@ -245,8 +255,7 @@ export function registerCodexImageFeature(pi: ExtensionAPI): void {
 				signal,
 			});
 			if (!response.ok) {
-				const errorText = await response.text();
-				throw new Error(`Image generation failed (${response.status}): ${errorText.slice(0, 1000)}`);
+				throw new Error(formatImageGenerationError(response.status, await response.text()));
 			}
 
 			const { payload, saved } = await readImageResponseAndSave(response, ctx, params, (image) => {
