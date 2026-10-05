@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAgentBrowserFeature } from "./features/agent-browser.ts";
 import { registerCodexImageFeature } from "./features/codex-image.ts";
+import { registerCompactionFeature } from "./features/compaction.ts";
 import { registerEnvFeature } from "./features/env.ts";
 import { registerFooterFeature } from "./features/footer.ts";
 import { registerHerdrGitMetadataFeature } from "./features/herdr-git-metadata.ts";
@@ -14,6 +15,7 @@ import { registerTurnStampFeature } from "./features/turn-stamp.ts";
 export default function piAdam(pi: ExtensionAPI): void {
 	registerAgentBrowserFeature(pi);
 	registerCodexImageFeature(pi);
+	registerCompactionFeature(pi);
 	registerEnvFeature(pi);
 	registerFooterFeature(pi);
 	registerHerdrGitMetadataFeature(pi);

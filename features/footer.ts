@@ -1,7 +1,8 @@
-import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { isCodexModel, registerCodexFastFeature } from "./codex-fast.ts";
 import { registerCodexUsageFeature } from "./codex-usage.ts";
+import { centeredFooter, readFooterGitStats, type FooterGitStats } from "./footer-git.ts";
 
 type Rgb = readonly [red: number, green: number, blue: number];
 
@@ -65,6 +66,21 @@ function styleThinkingLevel(theme: Theme, palette: FooterPalette, level: string)
 
 export function registerFooterFeature(pi: ExtensionAPI): void {
 	let footerInstalled = false;
+	let gitStats: FooterGitStats | undefined;
+	let gitRevision = 0;
+	const refreshGit = async (ctx: ExtensionContext) => {
+		if (ctx.mode !== "tui") return;
+		const revision = ++gitRevision;
+		let next: FooterGitStats | undefined;
+		try {
+			next = await readFooterGitStats(pi, ctx.cwd);
+		} catch {
+			// Git may be unavailable; never retain stale counts on failure.
+		}
+		if (revision !== gitRevision) return;
+		gitStats = next;
+		requestFooterRender?.();
+	};
 	let thinkingLevel = "high";
 	let requestFooterRender: (() => void) | undefined;
 	const requestRender = () => requestFooterRender?.();
@@ -84,13 +100,27 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 		if (event.message.role === "assistant") requestFooterRender?.();
 	});
 
+	pi.on("turn_end", (_event, ctx) => {
+		void refreshGit(ctx);
+	});
+	pi.on("agent_settled", (_event, ctx) => {
+		void refreshGit(ctx);
+	});
+
 	pi.on("session_start", (_event, ctx) => {
 		thinkingLevel = pi.getThinkingLevel();
 		if (ctx.mode !== "tui") return;
 
+		gitStats = undefined;
+		void refreshGit(ctx);
+
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			requestFooterRender = () => tui.requestRender();
-			const unsubBranch = footerData.onBranchChange(() => tui.requestRender());
+			const unsubBranch = footerData.onBranchChange(() => {
+				gitStats = undefined;
+				void refreshGit(ctx);
+				tui.requestRender();
+			});
 
 			return {
 				dispose() {
@@ -154,6 +184,15 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 					const divider = " " + colorize(palette.separator, "•") + " ";
 					const left = [modelStr, levelStr, fastStr].filter((part): part is string => part !== undefined).join(divider);
 					const right = [costStr, contextPct, codexStr].filter(Boolean).join(divider);
+					const git = gitStats;
+					const center = git ? [
+						git.added ? colorize(palette.primary, `+${git.added}`) : "",
+						git.removed ? colorize(palette.error, `−${git.removed}`) : "",
+						git.ahead ? colorize(palette.primary, `↑${git.ahead}`) : "",
+						git.behind ? colorize(palette.warning, `↓${git.behind}`) : "",
+					].filter(Boolean).join(" ") : "";
+					const centered = centeredFooter(width, left, center, right);
+					if (centered !== undefined) return [centered];
 					const rightWidth = visibleWidth(right);
 					const minimumGap = right ? 2 : 0;
 					const leftBudget = Math.max(0, width - rightWidth - minimumGap);
@@ -185,6 +224,8 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (footerInstalled && ctx.mode === "tui") ctx.ui.setFooter(undefined);
 		footerInstalled = false;
+		gitRevision += 1;
+		gitStats = undefined;
 		requestFooterRender = undefined;
 	});
 }

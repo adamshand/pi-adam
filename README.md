@@ -5,7 +5,7 @@ Personal pi quality-of-life extension.
 ## Features
 
 - Slash-command autocomplete is sorted by most recently used commands.
-- Compact custom footer keeps model, thinking level, and active Codex Fast mode on the left, with cost, context usage, and Codex limits right-aligned.
+- Compact custom footer keeps model, thinking level, and active Codex Fast mode on the left, with cost, context usage, and Codex limits right-aligned. Git stats (`+142 −38 ↑2 ↓3`) sit centered where space permits; zero counts are hidden. Line counts are net tracked-file changes versus HEAD (staged and unstaged; excludes untracked and binary files). Arrows compare against the configured upstream as of the last fetch; the footer never fetches. Stats refresh asynchronously at startup, branch changes, turn completion, and settlement; unavailable Git/HEAD or insufficient space hides the group.
 - `/fast` toggles Fast mode for supported GPT-5.4–5.6 Codex models using ChatGPT OAuth; `alt+shift+tab` does the same.
 - `codex_image` generates and saves images through Codex's native `gpt-image-2` hosted tool.
 - Bundles a pinned `agent-browser` CLI and loads its current core skill on demand for headless application testing.
@@ -20,6 +20,12 @@ Personal pi quality-of-life extension.
 - Herdr agent rows can show each Pi pane's Git branch, working-tree changes, and upstream divergence through custom metadata tokens.
 - The work ledger keeps current-session Todos visible in a Herdr pane while retaining project-wide Ideas for later.
 - One-shot session timers wake the agent without polling, surviving reload and session resume.
+
+## Agent-requested compaction
+
+`request_compaction({})` queues Pi's existing compaction process for the end of the agent's response. The tool recommends considering compaction after finishing a job with context usage over 50%; this is guidance, not an enforced threshold. Each model request receives a small, non-persisted context-usage hint.
+
+The agent can deliver its final response before compaction starts. Duplicate requests coalesce, queued work delays compaction, and an intervening successful compaction satisfies the request. Aborted/failed runs and session changes discard pending requests. No summary instructions, provider selection, or automatic compaction settings are changed.
 
 ## Timers
 
@@ -156,6 +162,7 @@ Use an explicit `--session` with `--restore` or `--profile` only when browser st
 
 - `features/agent-browser.ts` — pinned CLI environment, dynamic skill, session isolation, and cleanup
 - `skills/agent-browser/SKILL.md` — version-matched browser skill bootstrap
+- `features/compaction.ts` — agent-requested compaction at a completed-run boundary
 - `features/env.ts` — dotenv loading and `/env`
 - `features/footer.ts` — custom session footer
 - `features/codex-fast.ts` — guarded, session-persisted Codex Fast mode
