@@ -47,6 +47,11 @@ export function registerCompactionFeature(pi: ExtensionAPI): void {
 		}
 		if (ctx.hasPendingMessages()) return;
 		clear();
+		if (ctx.hasUI) {
+			const percent = ctx.getContextUsage()?.percent;
+			const usage = percent == null ? "" : ` (${percent.toFixed(1)}% context)`;
+			ctx.ui.notify(`Agent-requested compaction starting${usage}`, "info");
+		}
 		// compact() aborts and waits for idle. Never await it from a lifecycle
 		// handler: let settlement finish so the existing compactor can proceed.
 		ctx.compact({

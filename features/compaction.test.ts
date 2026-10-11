@@ -4,7 +4,7 @@ import type { CompactOptions, ExtensionContext } from "@earendil-works/pi-coding
 import { registerCompactionFeature } from "./compaction.ts";
 import { createTestExtensionApi, createTestExtensionContext } from "./test-extension.ts";
 
-function harness() {
+function harness(hasUI = true) {
 	type Event = { outcome?: string; messages?: unknown[] };
 	type Result = { messages: { content: string }[] } | undefined;
 	const handlers = new Map<string, (event: Event, ctx: ExtensionContext) => Result>();
@@ -17,7 +17,7 @@ function harness() {
 		getContextUsage: () => percent === undefined ? undefined : { percent },
 		hasPendingMessages: () => pending,
 		compact: (options?: CompactOptions) => { calls.push(options); },
-		hasUI: true,
+		hasUI,
 		ui: { notify: (text: string) => { notifications.push(text); } },
 	});
 	registerCompactionFeature(createTestExtensionApi({
@@ -48,7 +48,7 @@ test("request returns before compaction; repeated requests compact once at compl
 	h.emit("agent_before_settle", { outcome: "completed" });
 	assert.equal(h.calls.length, 1);
 	h.calls[0]?.onError?.(new Error("provider unavailable"));
-	assert.deepEqual(h.notifications, ["Requested compaction failed: provider unavailable"]);
+	assert.deepEqual(h.notifications, ["Agent-requested compaction starting (65.0% context)", "Requested compaction failed: provider unavailable"]);
 });
 
 test("queued work delays compaction without losing the request", async () => {
@@ -57,6 +57,7 @@ test("queued work delays compaction without losing the request", async () => {
 	h.setPending(true);
 	h.emit("agent_before_settle", { outcome: "completed" });
 	assert.equal(h.calls.length, 0);
+	assert.deepEqual(h.notifications, []);
 	h.setPending(false);
 	h.emit("agent_before_settle", { outcome: "completed" });
 	assert.equal(h.calls.length, 1);
@@ -70,7 +71,29 @@ test("session changes, existing compaction, and interrupted runs clear requests"
 		else h.emit(name);
 		h.emit("agent_before_settle", { outcome: "completed" });
 		assert.equal(h.calls.length, 0, name);
+		assert.deepEqual(h.notifications, [], name);
 	}
+});
+
+test("agent compaction notices use usage at trigger time and stay silent without UI", async () => {
+	const h = harness();
+	await h.tool.execute();
+	assert.deepEqual(h.notifications, []);
+	h.setPercent(63);
+	h.emit("agent_before_settle", { outcome: "completed" });
+	assert.deepEqual(h.notifications, ["Agent-requested compaction starting (63.0% context)"]);
+	for (const percent of [null, undefined]) {
+		const unknown = harness();
+		unknown.setPercent(percent);
+		await unknown.tool.execute();
+		unknown.emit("agent_before_settle", { outcome: "completed" });
+		assert.deepEqual(unknown.notifications, ["Agent-requested compaction starting"]);
+	}
+	const headless = harness(false);
+	await headless.tool.execute();
+	headless.emit("agent_before_settle", { outcome: "completed" });
+	assert.equal(headless.calls.length, 1);
+	assert.deepEqual(headless.notifications, []);
 });
 
 test("context usage is current, request-local, and handles unknown estimates", () => {
