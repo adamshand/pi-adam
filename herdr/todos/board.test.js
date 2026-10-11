@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
-import { createIdea, createTodo, getWorkItem, listIdeas, listTodos } from "./work-item-store.js";
+import { workFixture } from "./work-test-fixture.js";
+import { createTodo, getWorkItem, listTodos } from "./work-item-store.js";
 
 const boardPath = new URL("./board.js", import.meta.url);
 
@@ -32,11 +33,16 @@ async function waitFor(predicate, message) {
 	assert.fail(message);
 }
 
-function startBoard(cwd, view = "todos", statePath = "") {
+function startBoard(cwd, view = "todos", statePath = "", workEnv = {}) {
 	let output = "";
 	const board = spawn(process.execPath, [boardPath.pathname], {
 		env: {
 			...process.env,
+			WORK_API_TOKEN: "test-token",
+			HAUME_WORK_API_TOKEN: "",
+			WORK_URL: "http://127.0.0.1:1",
+			XDG_STATE_HOME: join(cwd, "state"),
+			...workEnv,
 			PI_ADAM_TODO_CWD: cwd,
 			PI_ADAM_TODO_SESSION_ID: "session-one",
 			PI_ADAM_TODO_VIEW: view,
@@ -140,36 +146,39 @@ test("arrow keys select items and change Todo state without wrapping", async () 
 });
 
 test("Tab and clickable labels change views while k changes kind and follows the item", async () => {
-	const cwd = mkdtempSync(join(tmpdir(), "pi-adam-board-kind-"));
+	const f = await workFixture();
+	const cwd = f.cwd;
 	const statePath = join(cwd, "state", "session-one.view");
 	createTodo(cwd, { id: "session", title: "Session Todo", ownerSessionId: "session-one", createdInSessionId: "session-one" });
-	createIdea(cwd, { id: "future", title: "Future Idea", createdInSessionId: "other-session" });
-	const { board, screen } = startBoard(cwd, "todos", statePath);
+	await f.client.create(cwd, { title: "Future Idea" });
+	const { board, screen } = startBoard(cwd, "todos", statePath, { WORK_URL: f.options.url });
 	try {
 		await waitFor(() => screen().includes("Session Todo"), "board did not render Todos");
 		board.stdin.write("k");
 		await waitFor(() => screen().includes("Session Todo") && screen().includes("Future Idea"), "k did not follow Todo into Ideas");
-		assert.equal(getWorkItem(cwd, "session").kind, "idea");
+		assert.equal(getWorkItem(cwd, "session"), undefined);
 		assert.match(readFileSync(statePath, "utf8"), /"view":\s*"ideas"/);
 		board.stdin.write("k");
 		await waitFor(() => screen().includes("Session Todo") && !screen().includes("Future Idea"), "k did not follow Idea into Todos");
-		assert.equal(getWorkItem(cwd, "session").status, "ready");
+		assert.equal(listTodos(cwd)[0].status, "ready");
+		assert.ok(listTodos(cwd)[0].workId);
 		board.stdin.write("\t");
 		await waitFor(() => screen().includes("Future Idea"), "Tab did not switch to Ideas");
 		board.stdin.write("\x1b[<0;4;1M");
 		await waitFor(() => screen().includes("Session Todo") && !screen().includes("Future Idea"), "clicking Todos did not switch views");
 	} finally {
 		await stopBoard(board);
-		rmSync(cwd, { recursive: true, force: true });
+		await f.close();
 	}
 });
 
 test("Delete removes either kind and c clears done Todos only after y", async () => {
-	const cwd = mkdtempSync(join(tmpdir(), "pi-adam-board-delete-"));
+	const f = await workFixture();
+	const cwd = f.cwd;
 	createTodo(cwd, { id: "todo", title: "Delete Todo", status: "ready", ownerSessionId: "session-one", createdInSessionId: "session-one" });
 	createTodo(cwd, { id: "done", title: "Clear Done", status: "done", ownerSessionId: "session-one", createdInSessionId: "session-one" });
-	createIdea(cwd, { id: "idea", title: "Delete Idea", createdInSessionId: "session-one" });
-	const { board, screen } = startBoard(cwd);
+	const capture = await f.client.create(cwd, { title: "Delete Idea" });
+	const { board, screen } = startBoard(cwd, "todos", "", { WORK_URL: f.options.url });
 	try {
 		await waitFor(() => screen().includes("Delete Todo"), "board did not render Todo");
 		board.stdin.write("\x1b[3~");
@@ -187,7 +196,7 @@ test("Delete removes either kind and c clears done Todos only after y", async ()
 		board.stdin.write("\x7f");
 		await waitFor(() => screen().includes("Delete idea"), "macOS Delete did not request Idea confirmation");
 		board.stdin.write("y");
-		await waitFor(() => listIdeas(cwd).length === 0, "y did not delete Idea");
+		await waitFor(() => f.items.get(capture.item.id).state === "dropped" && !screen().includes("Saving"), "y did not drop Idea in Work");
 
 		board.stdin.write("c");
 		await waitFor(() => screen().includes("Delete 1 done Todo"), "c did not request clear confirmation from Ideas");
@@ -199,6 +208,51 @@ test("Delete removes either kind and c clears done Todos only after y", async ()
 		await waitFor(() => listTodos(cwd).length === 0, "y did not clear done Todos");
 	} finally {
 		await stopBoard(board);
-		rmSync(cwd, { recursive: true, force: true });
+		await f.close();
 	}
+});
+
+test("linked Todo completion offers remote closure and honours no/yes", async () => {
+ const f = await workFixture();
+ const { item } = await f.client.create(f.cwd, { title: "Linked outcome" });
+ await f.client.patch(item.id, { state: "open" });
+ const todo = createTodo(f.cwd, { title: item.title, status: "in_progress", ownerSessionId: "session-one", workId: item.id, workUrl: f.options.url });
+ const { board, screen } = startBoard(f.cwd, "todos", "", { WORK_URL: f.options.url });
+ try {
+  await waitFor(() => screen().includes("Linked outcome"), "Todo not visible");
+  board.stdin.write("\x1b[C");
+  await waitFor(() => screen().includes("Also mark linked"), "completion offer missing");
+  board.stdin.write("n");
+  await waitFor(() => !screen().includes("Also mark linked"), "offer not dismissed");
+  assert.equal(getWorkItem(f.cwd, todo.id).status, "done");
+  assert.equal(f.items.get(item.id).state, "open");
+  board.stdin.write("\x1b[D\x1b[C");
+  await waitFor(() => screen().includes("Also mark linked"), "second offer missing");
+  board.stdin.write("y");
+  await waitFor(() => f.items.get(item.id).state === "done", "Work item not completed");
+ } finally { await stopBoard(board); await f.close(); }
+});
+
+test("Idea details expose a Work hyperlink and a normal click opens exactly that ticket", async () => {
+ const f = await workFixture();
+ const { item } = await f.client.create(f.cwd, { title: "Clickable idea", intent: "Details" });
+ const bin = join(f.directory, "bin");
+ mkdirSync(bin);
+ const opener = join(bin, process.platform === "darwin" ? "open" : "xdg-open");
+ const log = join(f.directory, "opened link.json");
+ writeFileSync(opener, `#!${process.execPath}\nrequire("node:fs").writeFileSync(process.env.TEST_LINK_LOG, JSON.stringify(process.argv.slice(2)));\n`);
+ chmodSync(opener, 0o755);
+ const { board, screen, rawScreen } = startBoard(f.cwd, "ideas", "", { WORK_URL: f.options.url, PATH: `${bin}:${process.env.PATH}`, TEST_LINK_LOG: log });
+ try {
+  await waitFor(() => screen().includes("Clickable idea"), "Idea missing");
+  board.stdin.write("\r");
+  await waitFor(() => screen().includes("Open in Work ↗"), "Work link missing");
+  const url = `${f.options.url}/team/work/${item.id}`;
+  assert.ok(rawScreen().includes(`\x1b]8;;${url}\x1b\\`));
+  const row = rawScreen().split(/\r?\n/).findIndex((line) => line.includes("Open in Work")) + 1;
+  board.stdin.write(`\x1b[<0;3;${row}M`);
+  await waitFor(() => existsSync(log), "click did not launch browser");
+  assert.deepEqual(JSON.parse(readFileSync(log, "utf8")), [url]);
+  assert.ok(screen().includes("Open in Work"), "click closed the detail view");
+ } finally { await stopBoard(board); await f.close(); }
 });

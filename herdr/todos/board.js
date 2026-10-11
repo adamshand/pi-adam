@@ -1,16 +1,17 @@
 #!/usr/bin/env node
+import { execFile } from "node:child_process";
 import {
 	checklistProgress,
 	clearCompleted,
 	cycleTodo,
 	deleteWorkItem,
 	isCompleted,
-	listIdeas,
 	listTodos,
 	migrateLegacyWorkItems,
 	setTodoStatus,
-	toggleWorkItemKind,
 } from "./work-item-store.js";
+import { WorkIdeas } from "./work-ideas.js";
+import { workAge } from "./work-client.js";
 import { BOARD_VIEWS, readViewState, writeViewState } from "./view-state.js";
 
 const cwd = process.env.PI_ADAM_TODO_CWD || process.env.PWD || process.cwd();
@@ -41,6 +42,7 @@ let running = true;
 let selectedId;
 let detailId;
 let detailScroll = 0;
+let detailLink;
 let helpOpen = false;
 let confirmingClear = false;
 let confirmingDeleteId;
@@ -48,9 +50,37 @@ let visibleRows = new Map();
 let lastItemClick = { id: undefined, at: 0 };
 let lastDetailClickAt = 0;
 const doubleClickMs = 350;
+const ideas = new WorkIdeas();
+let remoteItems = [];
+let workStatus = "Work loading…";
+let notice = "";
+let busy = false;
+let refreshing = false;
+let refreshedAt = 0;
+let confirmingWorkTodo;
+const clean = (text) => Array.from(String(text)).filter((char) => char === "\n" || char === "\t" || (char.codePointAt(0) >= 32 && char.codePointAt(0) !== 127)).join("");
+async function refreshIdeas() {
+	if (refreshing) return;
+	refreshing = true;
+	try {
+		const result = await ideas.client.list(cwd);
+		remoteItems = result.items.map((item) => ({ id: item.id, kind: "idea", title: clean(item.title), intent: clean(item.description), progress: `${item.state} · ${item.source} · ${workAge(item.created_at)}`, checklist: [], createdAt: item.created_at, updatedAt: item.updated_at }));
+		workStatus = result.stale ? `STALE · ${result.error}` : result.outbox?.pending ? `Work · ${result.outbox.pending} queued (${result.outbox.blocked} blocked)` : "Work";
+	} catch { workStatus = "Work unavailable"; }
+	finally { refreshing = false; refreshedAt = Date.now(); if (running) render(); }
+}
+function runAction(operation) {
+	if (busy) return;
+	busy = true;
+	notice = "Saving to Work…";
+	void operation().catch((error) => { notice = clean(error.message); }).finally(() => { busy = false; render(); });
+}
+function offerCompletion(todo) {
+	if (todo?.status === "done" && todo.workId) { confirmingWorkTodo = todo; detailId = undefined; }
+}
 
 function loadItems() {
-	if (view === "ideas") return listIdeas(cwd);
+	if (view === "ideas") return remoteItems;
 	return listTodos(cwd, { sessionId }).sort((a, b) => {
 		const rank = { in_progress: 0, ready: 1, done: 2 };
 		return rank[a.status] - rank[b.status] || a.createdAt.localeCompare(b.createdAt);
@@ -173,6 +203,12 @@ function detailLines(item, width) {
 	const stateColor = item.kind === "idea" ? ansi.yellow : item.status === "done" ? ansi.green : item.status === "in_progress" ? ansi.yellow : ansi.gray;
 	lines.push(`${stateColor}${ansi.bold}${state}${ansi.reset}`);
 	lines.push(...wrapText(item.title, width).map((line) => `${ansi.bold}${ansi.white}${line}${ansi.reset}`));
+	if (item.kind === "idea") {
+		const url = `${ideas.client.url}/team/work/${encodeURIComponent(item.id)}`;
+		const label = fit("Open in Work ↗", width);
+		// OSC 8 also supports the terminal's native link gesture (e.g. Cmd-click).
+		lines.push(`${ansi.cyan}\x1b]8;;${url}\x1b\\${label}\x1b]8;;\x1b\\${ansi.reset}`);
+	}
 	if (item.intent) {
 		lines.push("");
 		lines.push(`${ansi.bold}Intent${ansi.reset}`);
@@ -202,7 +238,7 @@ function detailLines(item, width) {
 	return lines;
 }
 
-const simpleFooter = " [?] help  [alt-t] show/hide";
+function footer() { return notice || (view === "ideas" ? ` ${workStatus} · [r] refresh [?] help` : " [?] help  [alt-t] show/hide"); }
 
 function renderDetail(item, width, height) {
 	const allLines = detailLines(item, width);
@@ -210,8 +246,10 @@ function renderDetail(item, width, height) {
 	const maxScroll = Math.max(0, allLines.length - contentHeight);
 	detailScroll = Math.max(0, Math.min(detailScroll, maxScroll));
 	const lines = allLines.slice(detailScroll, detailScroll + contentHeight);
+	const linkIndex = lines.findIndex((line) => line.includes("\x1b]8;;"));
+	if (linkIndex >= 0) detailLink = { row: linkIndex + 1, width: Math.min(width, "Open in Work ↗".length), url: `${ideas.client.url}/team/work/${encodeURIComponent(item.id)}` };
 	while (lines.length < contentHeight) lines.push("");
-	lines.push(`${ansi.dim}${fit(simpleFooter, width)}${ansi.reset}`);
+	lines.push(`${ansi.dim}${fit(footer(), width)}${ansi.reset}`);
 	process.stdout.write(`\x1b[2J\x1b[H${lines.slice(0, height).join("\r\n")}`);
 }
 
@@ -231,7 +269,8 @@ function renderHelp(width, height) {
 		" Enter        Open/close detail",
 		" Esc          Back",
 		" Tab          Toggle view",
-		" k            Toggle item kind",
+		" k            Promote / defer via Work",
+		" r            Refresh Work / retry outbox",
 		" Delete       Delete item",
 		" c            Clear done Todos",
 		" q            Close pane",
@@ -240,7 +279,7 @@ function renderHelp(width, height) {
 	];
 	const lines = help.map((line) => fit(line, width)).slice(0, height - 1);
 	while (lines.length < height - 1) lines.push("");
-	lines.push(`${ansi.dim}${fit(simpleFooter, width)}${ansi.reset}`);
+	lines.push(`${ansi.dim}${fit(footer(), width)}${ansi.reset}`);
 	process.stdout.write(`\x1b[2J\x1b[H${lines.join("\r\n")}`);
 }
 
@@ -277,23 +316,27 @@ function renderOverview(items, selectedIndex, width, height) {
 	}
 
 	while (lines.length < height - 1) lines.push("");
-	if (confirmingDeleteId) {
+	if (confirmingWorkTodo) {
+		lines.push(`${ansi.yellow}${fit(" Also mark linked Work item done? [y]", width)}${ansi.reset}`);
+	} else if (confirmingDeleteId) {
 		const item = items.find((candidate) => candidate.id === confirmingDeleteId);
 		lines.push(`${ansi.yellow}${fit(` Delete ${item?.kind ?? "item"}${item ? ` “${item.title}”` : ""}? [y] confirm`, width)}${ansi.reset}`);
 	} else if (confirmingClear) {
 		const count = listTodos(cwd, { sessionId }).filter(isCompleted).length;
 		lines.push(`${ansi.yellow}${fit(` Delete ${count} done Todo${count === 1 ? "" : "s"}? [y] confirm`, width)}${ansi.reset}`);
 	} else {
-		lines.push(`${ansi.dim}${fit(simpleFooter, width)}${ansi.reset}`);
+		lines.push(`${ansi.dim}${fit(footer(), width)}${ansi.reset}`);
 	}
 	process.stdout.write(`\x1b[2J\x1b[H${lines.slice(0, height).join("\r\n")}`);
 }
 
 function render() {
+	detailLink = undefined;
 	const width = Math.max(8, (process.stdout.columns || 40) - 1);
 	const height = Math.max(10, process.stdout.rows || 24);
 	viewState = readViewState(statePath, view);
 	view = viewState.view;
+	if (view === "ideas" && !refreshing && Date.now() - refreshedAt > 30000) void refreshIdeas();
 	const items = loadItems();
 	const selectedIndex = ensureSelection(items);
 	const detailItem = detailId ? items.find((item) => item.id === detailId) : undefined;
@@ -336,6 +379,7 @@ function cycleSelected(id = selectedId) {
 	if (!todo) return;
 	const updated = cycleTodo(todo);
 	selectedId = updated?.id ?? todo.id;
+	offerCompletion(updated);
 	render();
 }
 
@@ -346,7 +390,7 @@ function changeSelectedState(delta) {
 	const current = statuses.indexOf(todo.status);
 	const next = Math.max(0, Math.min(statuses.length - 1, current + delta));
 	if (next === current) return;
-	setTodoStatus(cwd, todo.id, statuses[next]);
+	offerCompletion(setTodoStatus(cwd, todo.id, statuses[next]));
 	render();
 }
 
@@ -372,15 +416,15 @@ function toggleSelectedKind() {
 	const item = loadItems().find((candidate) => candidate.id === selectedId);
 	if (!item) return;
 	const keepDetail = detailId === item.id;
-	const updated = toggleWorkItemKind(cwd, item.id, sessionId);
-	if (!updated) return;
-	view = updated.kind === "idea" ? "ideas" : "todos";
-	viewState = { view };
-	writeViewState(statePath, viewState);
-	selectedId = updated.id;
-	detailId = keepDetail ? updated.id : undefined;
-	detailScroll = 0;
-	render();
+	runAction(async () => {
+		const result = item.kind === "idea" ? await ideas.promote(cwd, item.id, sessionId) : await ideas.defer(cwd, item.id, sessionId);
+		if (result.queued) { notice = `Deferred capture queued; Todo retained. ${result.error}`; return; }
+		await refreshIdeas();
+		selectView(item.kind === "idea" ? "todos" : "ideas");
+		selectedId = result.item?.id ?? result.id;
+		detailId = keepDetail ? selectedId : undefined;
+		notice = "";
+	});
 }
 
 function requestDelete() {
@@ -393,7 +437,9 @@ function requestDelete() {
 }
 
 function confirmDelete() {
-	if (confirmingDeleteId) deleteWorkItem(cwd, confirmingDeleteId);
+	const id = confirmingDeleteId;
+	if (id && view === "ideas") runAction(async () => { await ideas.drop(cwd, id); await refreshIdeas(); notice = ""; });
+	else if (id) deleteWorkItem(cwd, id);
 	confirmingDeleteId = undefined;
 	selectedId = undefined;
 	render();
@@ -417,6 +463,7 @@ function confirmClear() {
 }
 
 function handleMouse(input) {
+	if (busy || confirmingWorkTodo) return input.replace(new RegExp(`${ESCAPE_CHARACTER}\\[<\\d+;\\d+;\\d+[mM]`, "g"), "");
 	const mouse = new RegExp(`${ESCAPE_CHARACTER}\\[<(\\d+);(\\d+);(\\d+)([mM])`, "g");
 	let match;
 	while ((match = mouse.exec(input)) !== null) {
@@ -426,6 +473,13 @@ function handleMouse(input) {
 		const pressed = match[4] === "M";
 		if (!pressed || helpOpen) continue;
 		if (detailId) {
+			if (button === 0 && detailLink && row === detailLink.row && column >= 1 && column <= detailLink.width) {
+				lastDetailClickAt = 0;
+				execFile(process.platform === "darwin" ? "open" : "xdg-open", [detailLink.url], { timeout: 5000 }, (error) => {
+					if (error) { notice = "Could not launch browser; use the terminal link gesture."; render(); }
+				});
+				continue;
+			}
 			if (button === 64) scrollDetail(-1);
 			else if (button === 65) scrollDetail(1);
 			else if (button === 0) {
@@ -485,6 +539,18 @@ function keyTokens(input) {
 }
 
 function handleKey(input) {
+	if (busy) return;
+	if (confirmingWorkTodo) {
+		const todo = confirmingWorkTodo;
+		confirmingWorkTodo = undefined;
+		if (input.toLowerCase() === "y") runAction(async () => { await ideas.complete(todo); notice = "Work marked done."; });
+		render();
+		return;
+	}
+	if (input.toLowerCase() === "r") {
+		runAction(async () => { await ideas.client.flush(true); await refreshIdeas(); notice = ""; });
+		return;
+	}
 	if (confirmingClear || confirmingDeleteId) {
 		if (input.toLowerCase() === "y") {
 			if (confirmingDeleteId) confirmDelete();

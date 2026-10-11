@@ -8,6 +8,7 @@ Personal pi quality-of-life extension.
 - Compact custom footer keeps model, thinking level, and active Codex Fast mode on the left, with cost, context usage, and Codex limits right-aligned. Git stats (`+142 −38 ↑2 ↓3`) sit centered where space permits; zero counts are hidden. Line counts are net tracked-file changes versus HEAD (staged and unstaged; excludes untracked and binary files). Arrows compare against the configured upstream as of the last fetch; the footer never fetches. Stats refresh asynchronously at startup, branch changes, turn completion, and settlement; unavailable Git/HEAD or insufficient space hides the group.
 - `/fast` toggles Fast mode for supported GPT-5.4–5.6 Codex models using ChatGPT OAuth; `alt+shift+tab` does the same.
 - `codex_image` generates and saves images through Codex's native `gpt-image-2` hosted tool.
+- Codemode's `save_image` saves image blocks from built-in image models as local artifacts without shell/base64 plumbing.
 - Bundles a pinned `agent-browser` CLI and loads its current core skill on demand for headless application testing.
 - Gives every Pi session isolated browser state, bounded output, and a 15-minute idle-cleanup backstop.
 - Adds Pi-specific orchestration guidance for parallel Luna scouts and fresh Kimi/Grok change reviews through `pi-subagents`.
@@ -22,6 +23,49 @@ Personal pi quality-of-life extension.
 - Herdr agent rows can show each Pi pane's Git branch, working-tree changes, and upstream divergence through custom metadata tokens.
 - The work ledger keeps current-session Todos visible in a Herdr pane while retaining project-wide Ideas for later.
 - One-shot session timers wake the agent without polling, surviving reload and session resume.
+
+## Codemode-friendly tools
+
+`todo` and `idea` return structured `{ action, items }` results in Codemode. Lists always return an array (including `[]`). Ideas are backed by Work; check `stale`, `queued`, `blocked`, `error`, and `outbox` before treating an operation as settled. A queued capture has a UUID `key`, not a fabricated Work ID. Other failures reject. Direct calls retain readable JSON output.
+
+```js
+const { items } = await tools.todo({ action: "list" });
+text(items.map(({ id, title, status }) => ({ id, title, status })));
+```
+
+`codex_image` saves an image and returns metadata including `outputPath`, `mimeType`, `model`, `imageModel`, and requested `size`. It no longer attaches an image by default. Set `preview: true` for a direct-call image attachment, or read the saved path separately to inspect selected results. Codemode receives metadata only, even with `preview: true`; do not regenerate an image just to inspect it.
+
+```js
+const artifact = await tools.codex_image({
+  prompt: "A red fox in the snow, watercolor",
+  size: "1024x1024",
+  "target-path": "./images",
+});
+text({ path: artifact.outputPath, mimeType: artifact.mimeType });
+```
+
+For Pi's built-in `models.generateImages()`, use the Codemode-exposed `save_image` tool to save image blocks without sending base64 through shell arguments or model context. It returns `outputPath`, `mimeType`, `bytes`, and actual `width`/`height`. Files get unique names and are never overwritten. PNG, JPEG, WebP, and GIF headers are supported, up to 20 MiB decoded per image; this checks headers, not full image integrity. Relative destination directories resolve against the session cwd; omitted destinations use a temporary `pi-image-artifacts` directory. Use a project directory for durable artifacts.
+
+```js
+const result = await models.generateImages(
+  { provider: "openrouter", id: "google/gemini-2.5-flash-image" },
+  { input: [{ type: "text", text: "A red fox in the snow, watercolor" }] },
+);
+// Preserve usage and generation errors even if saving fails later.
+text({ model: result.model, stopReason: result.stopReason, usage: result.usage, error: result.errorMessage });
+if (result.stopReason !== "stop") exit();
+const saves = await Promise.allSettled(
+  result.output.filter(block => block.type === "image")
+    .map(block => tools.save_image({ image: block, "target-path": "./images" })),
+);
+for (const saved of saves) {
+  text(saved.status === "fulfilled" ? saved.value : { saveError: String(saved.reason) });
+}
+```
+
+Inspect selected saved paths with `read`; no regeneration is needed. `save_image` makes no model calls and does not change Pi's provider routing or usage accounting. If saving fails, retry saving the same block within the script rather than paying to regenerate it. Large base64 arguments are omitted from Pi's bounded nested-call history, but tools and extension hooks still receive them: this is context minimization, not secret storage.
+
+Filter bulky intermediate results before printing; keep errors and artifact paths visible. Use `Promise.allSettled()` for independent work, but await dependent mutations in order. Never print/store image base64. Codemode calls perform real side effects and are not rolled back when a later step fails. Existing tool exposure, native compaction, and durable timer behavior are unchanged; the new `save_image` is exposed through Codemode only.
 
 ## Agent-requested compaction
 
@@ -65,12 +109,10 @@ Git metadata is refreshed when a session starts or settles and every five second
 
 ## Todos and Ideas
 
-The ledger stores durable Work Items of two kinds:
+- **Todos** stay local in **one file per session**, `.pi/todos/<session-id>.json`, with status `ready`, `in_progress`, or `done`. Each file contains the session's complete plan: Todo IDs, intent, progress, checklists, and Work links.
+- **Ideas** live in [Work](https://work.haume.nz). The Ideas view includes this project's `inbox` and `open` items from every source, including feedback. Use the `work-triage` skill for bulk triage.
 
-- **Todo** — a commitment owned by one Pi session, with status `ready`, `in_progress`, or `done`.
-- **Idea** — a project-wide possibility, follow-up, or future commitment retained for later.
-
-Every Work Item remembers the Pi session where it was first captured. Promoting an Idea assigns it to the current session as a ready Todo; deferring an unfinished Todo removes its owner and turns it back into an Idea. Both transitions preserve its ID, origin, structured intent, checklist, progress, and timestamps. Ideas can also be dismissed; done Todos can be cleared.
+Promoting opens the Work item with a session comment and creates a linked local Todo. Repeating promotion in that session reuses the Todo. Completing a linked Todo offers to mark Work done; it never silently closes it. In headless use the tool returns an offer; after user approval, repeat `complete` with `sync_work: true`. Deferring returns linked Work to `inbox`, or captures an unlinked Todo in Work. The local Todo remains until Work confirms receipt. Dismissing an Idea sets `dropped` with a comment; deleting/clearing local Todos does not change Work.
 
 Capture work directly from Pi:
 
@@ -80,9 +122,22 @@ Capture work directly from Pi:
 /todos
 ```
 
-Omitting a title from `/todo` or `/idea` opens an input prompt. The agent-facing `todo` tool exposes explicit `start`, `complete`, and `reopen` actions and structured intent, progress, and nested checklist fields. Work Items are pretty-printed JSON records under `.pi/work-items`.
+Omitting a title from `/todo` or `/idea` opens an input prompt. `/idea` captures with source `idea`; agent captures use `agent`. IDs are `IDEA-<last six hex>` or full `work_<24 hex>` IDs. Ambiguous short IDs and stale-list mutation lookups are rejected. Intent and checklists become Markdown; updates add/replace Pi-managed sections without overwriting unrelated feedback or import provenance.
 
-The extension automatically migrates older Markdown Work Items and legacy `.pi/todos` and `.pi/ideas` records. Session ownership becomes first-class metadata, former assignment becomes `in_progress`, and unfinished project-tagged or unscoped Todos become Ideas.
+### Work configuration and recovery
+
+- Auth: `WORK_API_TOKEN`, then `HAUME_WORK_API_TOKEN`, then macOS Keychain service `work.haume.nz`. Tokens stay in memory. `WORK_URL` defaults to `https://work.haume.nz`.
+- Project: git root's `.pi/work.json` (`{"project":"slug"}`, or `null` for unassigned), otherwise repository basename without `.git`, with aliases for imported projects such as `made` → `haume-made`. Unmatched repositories show **unassigned** items, not the global inbox.
+- HTTP requests time out after 5 seconds. Session startup does not wait for Work. Lists cache locally and show `STALE` on failure.
+- Creates are durably queued before sending in `~/.local/state/pi-adam/work-outbox.jsonl` (`$XDG_STATE_HOME/pi-adam` when set). A UUID `Idempotency-Key` and frozen payload make lost-response retries safe. Successful results are retained as receipt files so deferred Todos can finish safely after restart.
+- Lists and successful mutations flush queued captures. Authentication/validation failures remain blocked, rather than retrying endlessly. After fixing the cause, use `/work-outbox retry` (or `r` in Herdr). Never change the frozen payload of a possibly delivered capture; investigate a conflict before replacing it.
+- Outbox writes use a cross-process lock. If a process crashes with a lock held, verify the PID in `work-outbox.lock/owner.json` has exited before manually removing that lock directory. Locks are not automatically stolen.
+
+On startup, existing per-Todo `.pi/work-items/*.json` and legacy Todo Markdown are consolidated into session files, preserving IDs, ownership, timestamps, and Work links. Source Todo files are removed only after their contents are saved; conflicting records are retained and reported rather than overwritten. Old Todos without an owner are kept separately in `.pi/todos/_unowned.json` without inventing session ownership. Ideas live exclusively in Work. The one-off Idea migration is finished: there is no startup import, provenance check, or legacy Idea migration script. Any old Idea files in other checkouts are ignored; Todo migration does not delete them.
+
+Todo writes use atomic replacement and a short cross-process `.pi/todos.lock` to serialize updates from Pi and Herdr. If a writer crashes, verify the PID in `todos.lock/owner.json` has exited before removing the lock directory. Malformed plans and stale full-item writes are rejected, not overwritten.
+
+There is **no automatic cleanup** on exit, startup, completion, or by age. Completed Todos remain available for review/reopening. `/todos clear` still removes only completed Todos from the current session after confirmation, leaving other sessions alone. Empty session files are retained too; cleanup policy is a separate decision.
 
 ## Herdr board
 
@@ -113,9 +168,9 @@ Use `Tab` or the clickable labels to switch views. The Pi command controls the p
 
 `Alt+T` toggles the board while the Pi pane is focused.
 
-The header bar is segmented by state: green for done, amber for in progress, and grey for ready. Titles wrap instead of truncating.
+The header bar is segmented by state: green for done, amber for in progress, and grey for ready. Titles wrap instead of truncating. The Ideas view refreshes from Work every 30 seconds while visible, shows cache/outbox status, and uses the same promote/defer/drop logic as the tools. Configure credentials in Herdr's environment or Keychain too; secrets are never passed as process arguments.
 
-Mouse controls are deliberately direct: single-click selects, double-click opens or closes focused detail, clicking `Todos` or `Ideas` changes view, clicking a Todo icon cycles its state, and the wheel scrolls focused detail.
+Mouse controls are deliberately direct: single-click selects, double-click opens or closes focused detail, clicking `Todos` or `Ideas` changes view, clicking a Todo icon cycles its state, and the wheel scrolls focused detail. In Idea details, click **Open in Work ↗** to open that ticket in your default browser (the terminal's native hyperlink gesture also works).
 
 Keyboard controls are limited to:
 
@@ -125,12 +180,13 @@ Keyboard controls are limited to:
 - `Esc` — close focused detail or help
 - `?` — show or hide the controls reference
 - `Tab` — toggle views
-- `k` — toggle Todo/Idea kind and follow the item into its new view
-- `Delete` — delete either kind after confirmation
+- `k` — promote/defer via Work and follow the item into its new view
+- `r` — refresh Work and retry the outbox, including blocked captures
+- `Delete` — delete a local Todo or drop a Work Idea after confirmation
 - `c` — clear all done Todos after confirmation
 - `q` — close the pane
 
-The footer stays minimal: `[?] help  [alt-t] show/hide`. For deletion and clearing, `y` confirms and any other key cancels. `Alt+T` opens the board from Pi and hides it from the board pane. `Alt+Shift+Tab` toggles Codex Fast mode.
+The Todo footer stays minimal: `[?] help  [alt-t] show/hide`; Ideas show Work/stale/outbox status. For deletion, clearing, and linked Work completion, `y` confirms and any other key cancels. `Alt+T` opens the board from Pi and hides it from the board pane. `Alt+Shift+Tab` toggles Codex Fast mode.
 
 To open the plugin pane manually from a Pi pane:
 
@@ -179,6 +235,7 @@ Use `/review-changes <goal and acceptance criteria>` to request the dual review 
 - `features/codex-fast.ts` — guarded, session-persisted Codex Fast mode
 - `features/codex-image.ts` — Codex-hosted image generation and file saving
 - `features/codex-image-utils.ts` — completed-image payload and SSE parsing helpers
+- `features/save-image.ts` — Codemode image-block persistence with metadata-only results
 - `features/codex-usage.ts` — lifecycle-safe Codex usage and banked-reset API integration
 - `features/diagnostics.ts` — bounded, secret-redacting provider diagnostics
 - `features/herdr-git-metadata.ts` — per-pane Git branch, working-tree, and upstream status for Herdr Agent tokens

@@ -7,18 +7,15 @@ import {
 	checklistProgress,
 	clearCompleted,
 	completeTodo,
-	createIdea,
 	createTodo,
+	createWorkItem,
 	cycleTodo,
-	deferTodo,
 	getWorkItem,
-	listIdeas,
+	listWorkItems,
 	listTodos,
 	migrateLegacyWorkItems,
-	promoteIdea,
 	reopenTodo,
 	startTodo,
-	toggleWorkItemKind,
 	updateWorkItem,
 } from "./work-item-store.js";
 
@@ -57,8 +54,9 @@ test("structured intent, progress, and nested checklists round-trip as JSON", ()
 		});
 		assert.deepEqual(checklistProgress(todo.checklist), { done: 2, total: 3 });
 		const raw = JSON.parse(readFileSync(todo.path, "utf8"));
-		assert.equal(raw.schema_version, 1);
-		assert.equal(raw.intent, "Desired outcome");
+		assert.equal(raw.schema_version, 2);
+		assert.equal(raw.session_id, "owner");
+		assert.equal(raw.todos[0].intent, "Desired outcome");
 		assert.ok(todo.path.endsWith(".json"));
 		const updated = updateWorkItem(f.cwd, todo.id, { progress: "Verified", checklist: [{ text: "Complete", done: true }] });
 		assert.equal(updated.progress, "Verified");
@@ -76,37 +74,16 @@ test("malformed persisted Work Items are rejected at the storage boundary", () =
 	} finally { f.cleanup(); }
 });
 
-test("promotion and deferral preserve identity, provenance, and structured context", () => {
-	const f = fixture("pi-adam-work-kind-");
-	try {
-		const idea = createIdea(f.cwd, { title: "Later", intent: "Context", checklist: [{ text: "Question", done: false }], createdInSessionId: "origin" });
-		const promoted = promoteIdea(f.cwd, idea.id, "owner");
-		assert.equal(promoted.todo.id, idea.id);
-		assert.equal(promoted.todo.status, "ready");
-		assert.equal(promoted.todo.ownerSessionId, "owner");
-		assert.equal(promoted.todo.createdInSessionId, "origin");
-		const deferred = deferTodo(f.cwd, idea.id, "owner");
-		assert.equal(deferred.idea.id, idea.id);
-		assert.equal(deferred.idea.kind, "idea");
-		assert.equal(deferred.idea.ownerSessionId, undefined);
-		assert.equal(deferred.idea.intent, "Context");
-		assert.deepEqual(deferred.idea.checklist, [{ text: "Question", done: false }]);
-	} finally { f.cleanup(); }
-});
-
-test("kind toggling follows the Work Item between Ideas and ready Todos", () => {
-	const f = fixture("pi-adam-work-toggle-kind-");
-	try {
-		const todo = createTodo(f.cwd, { title: "Toggle", status: "done", ownerSessionId: "owner", createdInSessionId: "origin" });
-		const idea = toggleWorkItemKind(f.cwd, todo.id, "owner");
-		assert.equal(idea.kind, "idea");
-		assert.equal(idea.status, undefined);
-		assert.equal(idea.ownerSessionId, undefined);
-		const restored = toggleWorkItemKind(f.cwd, todo.id, "new-owner");
-		assert.equal(restored.kind, "todo");
-		assert.equal(restored.status, "ready");
-		assert.equal(restored.ownerSessionId, "new-owner");
-	} finally { f.cleanup(); }
+test("Work links survive local Todo updates; new local Ideas are rejected", () => {
+ const f = fixture("pi-adam-work-links-");
+ try {
+  const workId = "work_0123456789abcdef01234567";
+  const todo = createTodo(f.cwd, { title: "Linked", workId, workUrl: "https://work.haume.nz", workCaptureKey: "capture" });
+  completeTodo(f.cwd, todo.id);
+  assert.equal(getWorkItem(f.cwd, todo.id).workId, workId);
+  assert.equal(getWorkItem(f.cwd, todo.id).workCaptureKey, "capture");
+  assert.throws(() => createWorkItem(f.cwd, { title: "Legacy", kind: "idea" }), /Ideas live in Work/);
+ } finally { f.cleanup(); }
 });
 
 test("clear removes done Todos only for the requested owner", () => {
@@ -133,18 +110,18 @@ test("Markdown Work Items and older Todo/Idea files migrate to structured JSON",
 		writeFileSync(join(todos, "active.md"), `${JSON.stringify({ id: "active", title: "Active", status: "open", tags: ["session:owner"], assigned_to_session: "owner", created_at: "1" }, null, 2)}\n\nDesired result\n\n- [x] First\n- [ ] Second`);
 		writeFileSync(join(todos, "project.md"), `${JSON.stringify({ id: "project", title: "Project", status: "open", tags: ["project"], created_at: "2" }, null, 2)}\n\nFuture possibility`);
 		writeFileSync(join(ideas, "idea.md"), `${JSON.stringify({ id: "idea", title: "Idea", origin_session_id: "origin", created_at: "3", updated_at: "4" }, null, 2)}\n\nIdea context`);
-		assert.equal(migrateLegacyWorkItems(f.cwd).length, 4);
+		assert.equal(migrateLegacyWorkItems(f.cwd).length, 2);
 		assert.equal(getWorkItem(f.cwd, "done").status, "done");
 		assert.equal(getWorkItem(f.cwd, "done").progress, "Finished successfully.");
 		const active = getWorkItem(f.cwd, "active");
 		assert.equal(active.status, "in_progress");
 		assert.equal(active.intent, "Desired result");
 		assert.deepEqual(checklistProgress(active.checklist), { done: 1, total: 2 });
-		assert.deepEqual(listIdeas(f.cwd).map((item) => item.id), ["project", "idea"]);
-		assert.equal(getWorkItem(f.cwd, "idea").createdInSessionId, "origin");
+		assert.ok(listWorkItems(f.cwd).every((item) => item.kind === "todo"));
+		assert.match(readFileSync(join(ideas, "idea.md"), "utf8"), /Idea context/);
 		assert.equal(readdirSync(workItems).filter((name) => name.endsWith(".md")).length, 0);
-		assert.equal(readdirSync(todos).length, 0);
-		assert.equal(readdirSync(ideas).length, 0);
+		assert.deepEqual(readdirSync(todos), ["owner.json", "project.md"]);
+		assert.deepEqual(readdirSync(ideas), ["idea.md"]);
 		assert.equal(migrateLegacyWorkItems(f.cwd).length, 0);
 	} finally { f.cleanup(); }
 });

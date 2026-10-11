@@ -1,5 +1,5 @@
-import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomBytes, randomUUID } from "node:crypto";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { Type } from "typebox";
 import { Check, Parse } from "typebox/value";
@@ -12,6 +12,7 @@ const ChecklistEntrySchema = Type.Object({
 
 const WorkItemFileSchema = Type.Object({
 	id: Type.Optional(Type.String()),
+	revision: Type.Optional(Type.Integer({ minimum: 1 })),
 	kind: Type.Optional(Type.String()),
 	title: Type.Optional(Type.String()),
 	intent: Type.Optional(Type.String()),
@@ -22,6 +23,9 @@ const WorkItemFileSchema = Type.Object({
 	created_in_session_id: Type.Optional(Type.String()),
 	created_at: Type.Optional(Type.String()),
 	updated_at: Type.Optional(Type.String()),
+	work_id: Type.Optional(Type.String({ pattern: "^work_[a-f0-9]{24}$" })),
+	work_url: Type.Optional(Type.String()),
+	work_capture_key: Type.Optional(Type.String()),
 });
 
 const LegacyMetadataSchema = Type.Object({
@@ -38,7 +42,7 @@ const LegacyMetadataSchema = Type.Object({
 	tags: Type.Optional(Type.Array(Type.String())),
 });
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 export const TODO_STATUSES = ["ready", "in_progress", "done"];
 
 export function normalizeWorkItemId(value) {
@@ -88,206 +92,267 @@ export function isCompleted(item) {
 }
 
 export function workItemsDirectory(cwd) {
-	return join(cwd, ".pi", "work-items");
+	return join(cwd, ".pi", "work-items"); // Legacy per-Todo files, read only for migration.
 }
 
-export function workItemPath(cwd, id) {
-	return join(workItemsDirectory(cwd), `${normalizeWorkItemId(id)}.json`);
+export function sessionTodoPath(cwd, sessionId) {
+	const name = sessionId ? encodeURIComponent(sessionId).replaceAll(".", "%2E").replaceAll("_", "%5F") : "_unowned";
+	return join(cwd, ".pi", "todos", `${name}.json`);
+}
+
+function decodeItem(data, path) {
+	const kind = data.kind === "idea" ? "idea" : "todo";
+	return {
+		path, id: String(data.id ?? basename(path, ".json")), kind,
+		revision: data.revision ?? 1,
+		title: String(data.title ?? "Untitled"),
+		intent: data.intent ?? "", progress: data.progress ?? "",
+		checklist: normalizeChecklist(data.checklist),
+		status: kind === "todo" ? normalizeTodoStatus(data.status) : undefined,
+		ownerSessionId: kind === "todo" ? data.owner_session_id : undefined,
+		createdInSessionId: data.created_in_session_id,
+		createdAt: String(data.created_at ?? ""),
+		updatedAt: String(data.updated_at ?? data.created_at ?? ""),
+		workId: data.work_id, workUrl: data.work_url, workCaptureKey: data.work_capture_key,
+	};
 }
 
 export function readWorkItem(path) {
 	try {
-		const data = Parse(WorkItemFileSchema, JSON.parse(readFileSync(path, "utf8")));
-		const kind = data.kind === "idea" ? "idea" : "todo";
-		return {
-			path,
-			id: String(data.id ?? basename(path, ".json")),
-			kind,
-			title: String(data.title ?? "Untitled"),
-			intent: data.intent ?? "",
-			progress: data.progress ?? "",
-			checklist: normalizeChecklist(data.checklist),
-			status: kind === "todo" ? normalizeTodoStatus(data.status) : undefined,
-			ownerSessionId: kind === "todo" ? data.owner_session_id : undefined,
-			createdInSessionId: data.created_in_session_id,
-			createdAt: String(data.created_at ?? ""),
-			updatedAt: String(data.updated_at ?? data.created_at ?? ""),
-		};
-	} catch {
-		return undefined;
-	}
+		const raw = JSON.parse(readFileSync(path, "utf8"));
+		if (raw.todos !== undefined) return undefined; // Not a legacy single-item file.
+		return decodeItem(Parse(WorkItemFileSchema, raw), path);
+	} catch { return undefined; }
 }
 
-export function writeWorkItem(item) {
-	const kind = item.kind === "idea" ? "idea" : "todo";
+function encodeItem(item) {
 	const createdAt = item.createdAt || new Date().toISOString();
 	const data = {
-		schema_version: SCHEMA_VERSION,
-		id: normalizeWorkItemId(item.id),
-		kind,
+		id: normalizeWorkItemId(item.id), kind: "todo", revision: item.revision ?? 1,
 		title: String(item.title ?? "Untitled"),
-		created_at: createdAt,
-		updated_at: item.updatedAt || createdAt,
+		created_at: createdAt, updated_at: item.updatedAt || createdAt,
+		status: normalizeTodoStatus(item.status),
+		checklist: normalizeChecklist(item.checklist),
 	};
-	const checklist = normalizeChecklist(item.checklist);
 	if (item.intent) data.intent = String(item.intent);
 	if (item.progress) data.progress = String(item.progress);
-	if (checklist.length > 0) data.checklist = checklist;
-	if (kind === "todo") data.status = normalizeTodoStatus(item.status);
-	if (kind === "todo" && item.ownerSessionId) data.owner_session_id = item.ownerSessionId;
+	if (item.ownerSessionId) data.owner_session_id = item.ownerSessionId;
 	if (item.createdInSessionId) data.created_in_session_id = item.createdInSessionId;
-	mkdirSync(dirname(item.path), { recursive: true });
-	const temporary = `${item.path}.tmp-${process.pid}-${Date.now()}`;
-	writeFileSync(temporary, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-	try {
-		renameSync(temporary, item.path);
-	} catch (error) {
-		try { unlinkSync(temporary); } catch {}
-		throw error;
+	if (item.workId) data.work_id = item.workId;
+	if (item.workUrl) data.work_url = item.workUrl;
+	if (item.workCaptureKey) data.work_capture_key = item.workCaptureKey;
+	return data;
+}
+
+const SessionFileSchema = Type.Object({
+	schema_version: Type.Literal(SCHEMA_VERSION),
+	session_id: Type.Union([Type.String(), Type.Null()]),
+	updated_at: Type.String(),
+	todos: Type.Array(Type.Intersect([WorkItemFileSchema, Type.Object({
+		id: Type.String({ minLength: 1 }), kind: Type.Literal("todo"),
+		title: Type.String(), revision: Type.Integer({ minimum: 1 }),
+	})])),
+});
+
+function readSession(path) {
+	let raw;
+	try { raw = JSON.parse(readFileSync(path, "utf8")); }
+	catch (error) { if (error.code === "ENOENT") return []; throw error; }
+	// Fail closed: malformed session files must never be overwritten as empty plans.
+	if (!Check(SessionFileSchema, raw)) throw new Error(`Invalid Todo session file: ${path}`);
+	const ids = new Set();
+	for (const todo of raw.todos) {
+		if ((todo.owner_session_id ?? null) !== raw.session_id || ids.has(todo.id)) throw new Error(`Invalid Todo ownership or duplicate ID: ${path}`);
+		ids.add(todo.id);
 	}
-	return readWorkItem(item.path);
+	const cwd = dirname(dirname(dirname(path)));
+	if (path !== sessionTodoPath(cwd, raw.session_id)) throw new Error(`Todo session filename does not match its owner: ${path}`);
+	return raw.todos.map((data) => decodeItem(data, path));
 }
 
-function nextId(cwd) {
-	let id;
-	do id = randomBytes(4).toString("hex");
-	while (existsSync(workItemPath(cwd, id)));
-	return id;
+function atomicWrite(path, data) {
+	mkdirSync(dirname(path), { recursive: true });
+	const temp = `${path}.${randomUUID()}.tmp`;
+	const fd = openSync(temp, "wx", 0o600);
+	try {
+		try { writeFileSync(fd, JSON.stringify(data, null, 2) + "\n"); fsyncSync(fd); }
+		finally { closeSync(fd); }
+		renameSync(temp, path);
+	} finally { rmSync(temp, { force: true }); }
 }
 
-export function createWorkItem(cwd, options) {
-	mkdirSync(workItemsDirectory(cwd), { recursive: true });
-	const now = new Date().toISOString();
-	const requestedId = normalizeWorkItemId(options.id);
-	const id = requestedId && !existsSync(workItemPath(cwd, requestedId)) ? requestedId : nextId(cwd);
-	return writeWorkItem({
-		path: workItemPath(cwd, id),
-		id,
-		kind: options.kind,
-		title: options.title,
-		intent: options.intent ?? "",
-		progress: options.progress ?? "",
-		checklist: options.checklist ?? [],
-		status: options.status,
-		ownerSessionId: options.ownerSessionId,
-		createdInSessionId: options.createdInSessionId,
-		createdAt: options.createdAt || now,
-		updatedAt: options.updatedAt || options.createdAt || now,
+function saveSession(path, todos, sessionId) {
+	atomicWrite(path, {
+		schema_version: SCHEMA_VERSION, session_id: sessionId ?? null,
+		updated_at: new Date().toISOString(), todos: todos.map(encodeItem),
 	});
 }
 
-export function createTodo(cwd, options) {
-	return createWorkItem(cwd, { ...options, kind: "todo" });
+// Short synchronous read-modify-write transactions shared by Pi and the board.
+// Never hold this lock during network calls; never steal another writer's lock.
+function withStoreLock(cwd, operation) {
+	const lock = join(cwd, ".pi", "todos.lock");
+	mkdirSync(dirname(lock), { recursive: true });
+	const started = Date.now();
+	const sleeper = new Int32Array(new SharedArrayBuffer(4));
+	while (true) {
+		try { mkdirSync(lock); break; }
+		catch (error) {
+			if (error.code !== "EEXIST") throw error;
+			if (Date.now() - started > 2000) throw new Error(`Todo store busy: ${lock}. Retry; if the owner process exited, remove this lock directory.`);
+			Atomics.wait(sleeper, 0, 0, 10);
+		}
+	}
+	try {
+		writeFileSync(join(lock, "owner.json"), JSON.stringify({ pid: process.pid }));
+		return operation();
+	} finally { rmSync(lock, { recursive: true, force: true }); }
 }
 
-export function createIdea(cwd, options) {
-	return createWorkItem(cwd, { ...options, kind: "idea" });
+function jsonPaths(directory) {
+	try { return readdirSync(directory).filter((name) => name.endsWith(".json")).map((name) => join(directory, name)); }
+	catch (error) { if (error.code === "ENOENT") return []; throw error; }
+}
+
+function sessionTodos(cwd) {
+	return jsonPaths(join(cwd, ".pi", "todos")).flatMap(readSession);
+}
+
+function legacyItems(cwd) {
+	return jsonPaths(workItemsDirectory(cwd)).map(readWorkItem).filter(Boolean);
+}
+
+function migrateJsonUnlocked(cwd) {
+	const migrated = [];
+	for (const old of legacyItems(cwd).filter((item) => item.kind === "todo")) {
+		const path = sessionTodoPath(cwd, old.ownerSessionId);
+		const todos = readSession(path);
+		const existing = todos.find((todo) => todo.id === old.id);
+		if (existing && JSON.stringify(encodeItem(existing)) !== JSON.stringify(encodeItem({ ...old, createdAt: old.createdAt || existing.createdAt, updatedAt: old.updatedAt || existing.updatedAt }))) {
+			throw new Error(`Conflicting Todo migration for ${old.id}; both files retained: ${old.path}, ${path}`);
+		}
+		if (!existing) {
+			todos.push({ ...old, path });
+			saveSession(path, todos, old.ownerSessionId);
+		}
+		// Destination was atomically saved before removing the old per-item file.
+		unlinkSync(old.path);
+		migrated.push({ item: { ...old, path }, sourcePath: old.path });
+	}
+	return migrated;
 }
 
 export function listWorkItems(cwd) {
-	let names;
-	try {
-		if (!existsSync(workItemsDirectory(cwd))) return [];
-		names = readdirSync(workItemsDirectory(cwd)).filter((name) => name.endsWith(".json"));
-	} catch {
-		return [];
-	}
-	return names
-		.map((name) => readWorkItem(join(workItemsDirectory(cwd), name)))
-		.filter(Boolean)
-		.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+	const todos = sessionTodos(cwd);
+	const legacy = legacyItems(cwd).filter((item) => item.kind === "todo" && !todos.some((todo) => todo.id === item.id && todo.ownerSessionId === item.ownerSessionId));
+	return [...todos, ...legacy].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 }
 
 export function listTodos(cwd, options = {}) {
 	return listWorkItems(cwd).filter((item) => item.kind === "todo" && (options.sessionId === undefined || item.ownerSessionId === options.sessionId));
 }
 
-export function listIdeas(cwd) {
-	return listWorkItems(cwd).filter((item) => item.kind === "idea");
+export function getWorkItem(cwd, id) {
+	const matches = listWorkItems(cwd).filter((item) => item.id === normalizeWorkItemId(id));
+	if (matches.length > 1) throw new Error(`Ambiguous local Todo ID: ${id}`);
+	return matches[0];
 }
 
-export function getWorkItem(cwd, id) {
-	return readWorkItem(workItemPath(cwd, id));
+function nextId(cwd) {
+	let id;
+	do id = randomBytes(4).toString("hex"); while (getWorkItem(cwd, id));
+	return id;
+}
+
+function createUnlocked(cwd, options) {
+	const now = new Date().toISOString();
+	const requestedId = normalizeWorkItemId(options.id);
+	const id = requestedId && !getWorkItem(cwd, requestedId) ? requestedId : nextId(cwd);
+	const path = sessionTodoPath(cwd, options.ownerSessionId);
+	const item = decodeItem(encodeItem({ ...options, id, revision: 1, createdAt: options.createdAt || now, updatedAt: options.updatedAt || options.createdAt || now }), path);
+	const todos = readSession(path);
+	todos.push(item);
+	saveSession(path, todos, item.ownerSessionId);
+	return item;
+}
+
+export function createWorkItem(cwd, options) {
+	if (options.kind !== "todo") throw new Error("Ideas live in Work; local Idea writes are disabled.");
+	return withStoreLock(cwd, () => { migrateJsonUnlocked(cwd); return createUnlocked(cwd, options); });
+}
+
+export function createTodo(cwd, options) {
+	return createWorkItem(cwd, { ...options, kind: "todo" });
+}
+
+function mutateTodo(cwd, id, change) {
+	return withStoreLock(cwd, () => {
+		migrateJsonUnlocked(cwd);
+		const item = getWorkItem(cwd, id);
+		if (!item || item.kind !== "todo") return undefined;
+		const todos = readSession(item.path);
+		const index = todos.findIndex((todo) => todo.id === item.id);
+		const result = change(item);
+		if (result === undefined) return undefined;
+		if (result === null) todos.splice(index, 1);
+		else {
+			if (result.ownerSessionId !== item.ownerSessionId || result.id !== item.id) throw new Error("Cannot move a Todo between session files.");
+			todos[index] = { ...result, path: item.path, revision: item.revision + 1 };
+		}
+		saveSession(item.path, todos, item.ownerSessionId);
+		return result === null ? item : todos[index];
+	});
+}
+
+export function writeWorkItem(item) {
+	if (item.kind !== "todo") throw new Error("Ideas live in Work; local Idea writes are disabled.");
+	const cwd = dirname(dirname(dirname(item.path)));
+	return mutateTodo(cwd, item.id, (current) => {
+		if (current.revision !== item.revision) throw new Error("Todo changed concurrently; re-read it before writing.");
+		return item;
+	});
 }
 
 export function updateWorkItem(cwd, id, changes) {
-	const item = getWorkItem(cwd, id);
-	if (!item) return undefined;
-	return writeWorkItem({
+	return mutateTodo(cwd, id, (item) => ({
 		...item,
 		title: changes.title === undefined ? item.title : changes.title,
 		intent: changes.intent === undefined ? item.intent : changes.intent,
 		progress: changes.progress === undefined ? item.progress : changes.progress,
-		checklist: changes.checklist === undefined ? item.checklist : changes.checklist,
+		checklist: changes.checklist === undefined ? item.checklist : normalizeChecklist(changes.checklist),
 		updatedAt: new Date().toISOString(),
+	}));
+}
+
+export function deleteWorkItem(cwd, id, expectedRevision) {
+	return mutateTodo(cwd, id, (current) => {
+		if (expectedRevision !== undefined && current.revision !== expectedRevision) throw new Error("Todo changed concurrently; retained instead of deleted.");
+		return null;
 	});
 }
 
-export function deleteWorkItem(cwd, id) {
-	const item = getWorkItem(cwd, id);
-	if (!item) return undefined;
-	try {
-		unlinkSync(item.path);
-		return item;
-	} catch {
-		return undefined;
-	}
-}
-
 export function setTodoStatus(cwd, id, status) {
-	const item = getWorkItem(cwd, id);
-	if (!item || item.kind !== "todo") return undefined;
-	return writeWorkItem({ ...item, status: normalizeTodoStatus(status), updatedAt: new Date().toISOString() });
+	return mutateTodo(cwd, id, (item) => ({ ...item, status: normalizeTodoStatus(status), updatedAt: new Date().toISOString() }));
 }
 
-export function startTodo(cwd, id) {
-	return setTodoStatus(cwd, id, "in_progress");
-}
-
-export function completeTodo(cwd, id) {
-	return setTodoStatus(cwd, id, "done");
-}
-
-export function reopenTodo(cwd, id) {
-	return setTodoStatus(cwd, id, "ready");
-}
+export function startTodo(cwd, id) { return setTodoStatus(cwd, id, "in_progress"); }
+export function completeTodo(cwd, id) { return setTodoStatus(cwd, id, "done"); }
+export function reopenTodo(cwd, id) { return setTodoStatus(cwd, id, "ready"); }
 
 export function cycleTodo(item) {
 	if (!item || item.kind !== "todo") return undefined;
-	const next = item.status === "ready" ? "in_progress" : item.status === "in_progress" ? "done" : "ready";
-	return writeWorkItem({ ...item, status: next, updatedAt: new Date().toISOString() });
-}
-
-export function promoteIdea(cwd, id, ownerSessionId) {
-	const item = getWorkItem(cwd, id);
-	if (!item || item.kind !== "idea") return undefined;
-	const todo = writeWorkItem({ ...item, kind: "todo", status: "ready", ownerSessionId, updatedAt: new Date().toISOString() });
-	return { idea: item, todo };
-}
-
-export function deferTodo(cwd, id, ownerSessionId) {
-	const item = getWorkItem(cwd, id);
-	if (!item || item.kind !== "todo" || isCompleted(item) || (ownerSessionId && item.ownerSessionId !== ownerSessionId)) return undefined;
-	const idea = writeWorkItem({ ...item, kind: "idea", status: undefined, ownerSessionId: undefined, updatedAt: new Date().toISOString() });
-	return { todo: item, idea };
-}
-
-export function toggleWorkItemKind(cwd, id, ownerSessionId) {
-	const item = getWorkItem(cwd, id);
-	if (!item) return undefined;
-	if (item.kind === "idea") return writeWorkItem({ ...item, kind: "todo", status: "ready", ownerSessionId, updatedAt: new Date().toISOString() });
-	return writeWorkItem({ ...item, kind: "idea", status: undefined, ownerSessionId: undefined, updatedAt: new Date().toISOString() });
-}
-
-export function deleteIdea(cwd, id) {
-	const item = getWorkItem(cwd, id);
-	return item?.kind === "idea" ? deleteWorkItem(cwd, id) : undefined;
+	const cwd = dirname(dirname(dirname(item.path)));
+	return mutateTodo(cwd, item.id, (current) => ({
+		...current,
+		status: current.status === "ready" ? "in_progress" : current.status === "in_progress" ? "done" : "ready",
+		updatedAt: new Date().toISOString(),
+	}));
 }
 
 export function clearCompleted(cwd, options = {}) {
 	const deleted = [];
 	for (const item of listTodos(cwd, options).filter(isCompleted)) {
-		const removed = deleteWorkItem(cwd, item.id);
+		const removed = mutateTodo(cwd, item.id, (current) => isCompleted(current) ? null : undefined);
 		if (removed) deleted.push(removed);
 	}
 	return deleted;
@@ -326,21 +391,21 @@ function legacySessionId(metadata) {
 	return tag?.slice("session:".length);
 }
 
-function sameWorkItem(existing, candidate) {
-	return existing.kind === candidate.kind && existing.title === candidate.title;
-}
-
 function importLegacy(cwd, candidate, sourcePath) {
-	let id = normalizeWorkItemId(candidate.id);
-	const existing = getWorkItem(cwd, id);
-	if (existing && sameWorkItem(existing, candidate)) {
-		try { unlinkSync(sourcePath); } catch {}
-		return { item: existing, sourcePath };
-	}
-	if (existing) id = nextId(cwd);
-	const item = createWorkItem(cwd, { ...candidate, id });
-	try { unlinkSync(sourcePath); } catch {}
-	return { item, sourcePath };
+	return withStoreLock(cwd, () => {
+		if (!existsSync(sourcePath)) return undefined; // Another process already migrated it.
+		const id = normalizeWorkItemId(candidate.id);
+		const existing = getWorkItem(cwd, id);
+		if (existing) {
+			const comparable = { ...candidate, id, createdAt: candidate.createdAt || existing.createdAt, updatedAt: candidate.updatedAt || existing.updatedAt };
+			if (existing.kind !== "todo" || JSON.stringify(encodeItem(existing)) !== JSON.stringify(encodeItem(comparable))) throw new Error(`Conflicting Todo migration for ${id}; original retained: ${sourcePath}`);
+			unlinkSync(sourcePath);
+			return { item: existing, sourcePath };
+		}
+		const item = createUnlocked(cwd, { ...candidate, id });
+		unlinkSync(sourcePath);
+		return { item, sourcePath };
+	});
 }
 
 function migrateMarkdownDirectory(cwd, directory, sourceKind) {
@@ -356,6 +421,7 @@ function migrateMarkdownDirectory(cwd, directory, sourceKind) {
 		const rawStatus = normalizeTodoStatus(metadata.status);
 		const status = rawStatus === "ready" && metadata.assigned_to_session ? "in_progress" : rawStatus;
 		const kind = declaredKind === "idea" || (!ownerSessionId && status !== "done") ? "idea" : "todo";
+		if (kind === "idea") continue; // Preserve unmigrated Ideas for the explicit Work importer.
 		const bodyFields = markdownBodyFields(parsed.body, status, kind);
 		migrated.push(importLegacy(cwd, {
 			id: metadata.id ?? basename(name, ".md"),
@@ -369,13 +435,14 @@ function migrateMarkdownDirectory(cwd, directory, sourceKind) {
 			updatedAt: String(metadata.updated_at ?? metadata.created_at ?? ""),
 		}, sourcePath));
 	}
-	return migrated;
+	return migrated.filter(Boolean);
 }
 
 export function migrateLegacyWorkItems(cwd) {
+	const json = legacyItems(cwd).some((item) => item.kind === "todo") ? withStoreLock(cwd, () => migrateJsonUnlocked(cwd)) : [];
 	return [
+		...json,
 		...migrateMarkdownDirectory(cwd, workItemsDirectory(cwd), "todo"),
 		...migrateMarkdownDirectory(cwd, join(cwd, ".pi", "todos"), "todo"),
-		...migrateMarkdownDirectory(cwd, join(cwd, ".pi", "ideas"), "idea"),
 	];
 }
