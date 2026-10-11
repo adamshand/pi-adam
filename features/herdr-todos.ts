@@ -260,13 +260,25 @@ export function registerHerdrTodosFeature(pi: ExtensionAPI): void {
 	});
 
 	const toggleBoard = async (ctx: ExtensionContext): Promise<void> => {
+		if (!isHerdrPane()) {
+			ctx.ui.notify("pi-adam: Todo board requires Herdr", "warning");
+			return;
+		}
 		await refreshOpenState();
+		if (closeTimer) clearTimeout(closeTimer);
+		closeTimer = undefined;
 		if (open) {
 			visibility = "hidden";
 			await closeBoard();
 		} else {
 			visibility = "shown";
-			await reconcile(ctx, { force: true });
+			// A manual shortcut must not be discarded by an in-flight background reconcile.
+			const opened = await openBoard(ctx, false);
+			if (!opened) {
+				visibility = "hidden";
+				ctx.ui.notify("pi-adam: could not open Todo board. Check `herdr plugin list` for a missing or disabled pi-adam.todos plugin.", "error");
+				return;
+			}
 		}
 		ctx.ui.notify(`pi-adam: Todo board ${open ? "shown" : "hidden"}`, "info");
 	};
