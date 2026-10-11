@@ -36,6 +36,7 @@ const JwtClaimsSchema = Type.Object({
 
 const GenerateImageParams = Type.Object({
 	prompt: Type.String({ description: "Detailed prompt describing the image to generate." }),
+	preview: Type.Optional(Type.Boolean({ description: "Attach the generated image to a direct tool result for inspection. Default false; Codemode returns metadata only. Read outputPath separately to inspect without regenerating." })),
 	size: StringEnum(IMAGE_SIZES, {
 		description: "Output image size.",
 		default: "1024x1024",
@@ -49,15 +50,16 @@ const GenerateImageParams = Type.Object({
 export type GenerateImageParamsType = Static<typeof GenerateImageParams>;
 type ImageSaveContext = Pick<ExtensionContext, "cwd">;
 
-type GenerateImageDetails = {
-	model: string;
-	imageModel: typeof IMAGE_MODEL;
-	size: GenerateImageParamsType["size"];
-	targetPath: string;
-	outputPath: string;
-	mimeType: string;
-	responseId?: string;
-};
+const GenerateImageOutputSchema = Type.Object({
+	model: Type.String(),
+	imageModel: Type.Literal(IMAGE_MODEL),
+	size: StringEnum(IMAGE_SIZES),
+	targetPath: Type.String(),
+	outputPath: Type.String(),
+	mimeType: Type.String(),
+	responseId: Type.Optional(Type.String()),
+});
+type GenerateImageDetails = Static<typeof GenerateImageOutputSchema>;
 
 type SavedImage = {
 	outputPath: string;
@@ -71,8 +73,7 @@ export function formatImageGenerationError(status: number, responseBody: string)
 
 export function isCodexImageModel(model: Model<Api> | undefined): model is Model<"openai-codex-responses"> {
 	return model?.provider === CODEX_PROVIDER
-		&& model.api === CODEX_API
-		&& /^gpt-5\.(?:5|6)(?:$|-)/.test(model.id);
+		&& model.api === CODEX_API;
 }
 
 function hasHeader(headers: Headers, name: string): boolean {
@@ -227,12 +228,15 @@ export function registerCodexImageFeature(pi: ExtensionAPI): void {
 		promptGuidelines: [
 			"Use codex_image when the user asks to create, draw, generate, or render an image.",
 			"Pass codex_image a detailed prompt, choose the requested size, and set target-path when the user specifies a save folder.",
+			"Images are saved artifacts by default. Inspect selected outputPath files with read rather than regenerating; use preview only when a direct call needs the image in context.",
+			"In Codemode, filter intermediate results before printing them; preserve errors and artifact paths. Do not print or store image base64.",
 		],
 		parameters: GenerateImageParams,
+		outputSchema: GenerateImageOutputSchema,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const model = ctx.model;
 			if (!isCodexImageModel(model)) {
-				throw new Error(`${TOOL_NAME} requires a GPT-5.5 or GPT-5.6 model from ${CODEX_PROVIDER}.`);
+				throw new Error(`${TOOL_NAME} requires a model from ${CODEX_PROVIDER} using ${CODEX_API}.`);
 			}
 			const targetPath = resolveTargetPath(ctx, params);
 			const details = (outputPath = "", mimeType = "image/png"): GenerateImageDetails => ({
@@ -264,12 +268,16 @@ export function registerCodexImageFeature(pi: ExtensionAPI): void {
 					details: details(image.outputPath, image.mimeType),
 				});
 			});
+			const metadata: GenerateImageDetails = details(saved.outputPath, saved.mimeType);
+			const responseId = extractResponseId(payload);
+			if (responseId) metadata.responseId = responseId;
 			return {
 				content: [
-					{ type: "text", text: `Generated image saved to ${saved.outputPath}` },
-					{ type: "image", data: saved.base64, mimeType: saved.mimeType },
+					{ type: "text" as const, text: `Generated image saved to ${saved.outputPath}` },
+					...(params.preview ? [{ type: "image" as const, data: saved.base64, mimeType: saved.mimeType }] : []),
 				],
-				details: { ...details(saved.outputPath, saved.mimeType), responseId: extractResponseId(payload) },
+				details: metadata,
+				structuredContent: metadata,
 			};
 		},
 	});

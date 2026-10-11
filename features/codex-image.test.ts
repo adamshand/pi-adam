@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { buildHeaders, formatImageGenerationError, readImageResponseAndSave } from "./codex-image.ts";
+import { buildHeaders, formatImageGenerationError, isCodexImageModel, readImageResponseAndSave } from "./codex-image.ts";
 import { createTestExtensionContext } from "./test-extension.ts";
 import {
 	collectCompletedImageBase64,
@@ -22,6 +22,15 @@ const headerTestModel: Model<Api> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 1000, maxTokens: 100,
 };
+
+test("image generation accepts any Codex Responses model, but no other provider or API", () => {
+	for (const id of ["gpt-5.5", "gpt-5.6-sol", "gpt-6-astra", "future-model"]) {
+		assert.equal(isCodexImageModel({ ...headerTestModel, id }), true);
+	}
+	assert.equal(isCodexImageModel(undefined), false);
+	assert.equal(isCodexImageModel({ ...headerTestModel, provider: "openai" }), false);
+	assert.equal(isCodexImageModel({ ...headerTestModel, api: "openai-responses" }), false);
+});
 
 test("image headers omit null values and preserve provider authorization", async () => {
 	const ctx = createTestExtensionContext({
