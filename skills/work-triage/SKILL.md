@@ -1,18 +1,18 @@
 ---
 name: work-triage
-description: Read, capture and triage Adam's work items, ideas and feedback reports in Work (work.haume.nz) through its API. Use when asked to triage the inbox, check feedback or bug reports, find what to work on next, capture an idea, or update a work item or goal.
+description: Read, capture and triage Adam's work items, ideas and feedback reports in Work (mahi.haume.nz) through its API. Use when asked to triage the inbox, check feedback or bug reports, find what to work on next, capture an idea, or update a work item or goal.
 ---
 
 # Work triage
 
-Work (https://work.haume.nz) is Adam's inbox for ideas, agent captures and Feedback Reports from tools like `hm`. Items move `inbox → open → done`, or to `dropped`. They can carry a `priority` (must/should/later), a `goal`, and a `blocked_reason`.
+Work (https://mahi.haume.nz) is Adam's inbox for ideas, agent captures and Feedback Reports from tools like `hm`. Items move `inbox → open → done`, or to `dropped`. They can carry a `priority` (must/should/later), a `goal`, and a `blocked_reason`.
 
 ## Access
 
 The API token is in the macOS Keychain. Never print it, echo it or put it in a file:
 
 ```bash
-work() { curl -sS -H "Authorization: Bearer $(security find-generic-password -s work.haume.nz -w)" -H 'Content-Type: application/json' "https://work.haume.nz$1" "${@:2}"; }
+work() { curl -sS -H "Authorization: Bearer $(security find-generic-password -s mahi.haume.nz -w)" -H 'Content-Type: application/json' "https://mahi.haume.nz$1" "${@:2}"; }
 work '/api/v1/work?state=inbox'                    # also: state=inbox,open  project=…  goal=…  blocked=true
 work /api/v1/reports/FB-…                          # summary, reporter, context, artifacts, conversation
 work /api/v1/reports/FB-…/bundle -o /tmp/FB-….zip  # the diagnostic bundle (each download is logged)

@@ -210,7 +210,7 @@ export function registerTodosFeature(pi: ExtensionAPI, ideas = new WorkIdeas()):
 		name: "idea",
 		outputSchema: WorkItemOutputSchema,
 		label: "Idea",
-		description: "Manage this project's Ideas in Work (work.haume.nz): inbox/open items, including feedback. promote turns one into a session Todo; delete drops it. Offline, list returns stale:true and create returns queued:true with a UUID key, not a Work ID. Use the work-triage skill for bulk triage.",
+		description: "Manage this project's Ideas in Work (mahi.haume.nz): inbox/open items, including feedback. promote turns one into a session Todo; delete drops it. Offline, list returns stale:true and create returns queued:true with a UUID key, not a Work ID. Use the work-triage skill for bulk triage.",
 		promptSnippet: "Park side quests to look at later without derailing the current work",
 		promptGuidelines: [
 			"When a worthwhile tangent comes up that isn't part of the current task, capture it as an idea instead of pursuing it or letting it drop, and tell Adam you did.",

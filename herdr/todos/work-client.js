@@ -71,7 +71,7 @@ export function workDescription(intent = "", checklist = []) {
 export class WorkClient {
 	constructor(options = {}) {
 		this.env = options.env ?? process.env;
-		const url = new URL(options.url ?? this.env.WORK_URL ?? "https://work.haume.nz");
+		const url = new URL(options.url ?? this.env.WORK_URL ?? "https://mahi.haume.nz");
 		if (url.username || url.password || url.search || url.hash || url.pathname !== "/" || (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))) throw new Error("WORK_URL must be an HTTPS origin (HTTP is allowed for localhost tests).");
 		this.url = url.origin;
 		this.stateDir = options.stateDir ?? join(this.env.XDG_STATE_HOME || join(homedir(), ".local/state"), "pi-adam");
@@ -87,7 +87,7 @@ export class WorkClient {
 		if (override) return override;
 		if (!cachedTokens.has(this.url)) {
 			try {
-				const { stdout } = await exec("security", ["find-generic-password", "-s", "work.haume.nz", "-w"], { timeout: this.timeout, maxBuffer: 16384 });
+				const { stdout } = await exec("security", ["find-generic-password", "-s", "mahi.haume.nz", "-w"], { timeout: this.timeout, maxBuffer: 16384 });
 				cachedTokens.set(this.url, stdout.trim());
 			} catch { throw new WorkError("Work credentials unavailable: set WORK_API_TOKEN or HAUME_WORK_API_TOKEN, or configure Keychain.", 401); }
 		}
