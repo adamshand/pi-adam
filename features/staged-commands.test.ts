@@ -5,7 +5,7 @@ import { setImmediate as settle } from "node:timers/promises";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { createTestExtensionApi, createTestExtensionContext } from "./test-extension.ts";
-import { commandInvocation, commandPreview, copiedCommand, prepareCommand, quoteShell, registerStagedCommandsFeature, type CommandDraft } from "./staged-commands.ts";
+import { commandInvocation, commandMetadata, commandPreview, commandReview, copiedCommand, prepareCommand, quoteShell, registerStagedCommandsFeature, type CommandDraft } from "./staged-commands.ts";
 
 function harness() {
 	const events = new Map<string, () => void>();
@@ -24,7 +24,10 @@ function harness() {
 		cwd: "/tmp", get mode() { return mode; }, isIdle: () => idle,
 		ui: {
 			setWidget: (_key: string, factory: ((tui: TUI, theme: Theme) => Component) | undefined) => widgets.push(factory),
-			custom: async () => { executions++; return `[command completed · exit 0]\n$ /bin/sh -c '${lastScript}'\n\nexample output`; },
+			custom: async () => {
+				executions++;
+				return `[command completed · exit 0]\n$ /bin/sh -c '${lastScript}'\n\nexample output`;
+			},
 			notify: (text: string) => notices.push(text),
 		},
 	});
@@ -58,7 +61,7 @@ function harness() {
 	};
 }
 
-test("staging publishes exact invocation without execution; replacement runs only latest", async () => {
+test("staging publishes literal source without execution; replacement runs only latest", async () => {
 	const h = harness();
 	await h.stage("echo first");
 	await h.stage("echo second");
@@ -67,7 +70,9 @@ test("staging publishes exact invocation without execution; replacement runs onl
 	assert.equal(h.widgets.at(-1), undefined);
 	h.events.get("agent_settled")!();
 	assert.ok(h.widgets.at(-1));
-	assert.match(h.stagedTexts[0], /\$ \/bin\/sh -c 'echo first'/);
+	assert.match(h.stagedTexts[0], /Script:\necho first/);
+	assert.match(h.stagedTexts[0], /Local · Run as: current user · Interpreter: sh/);
+	assert.match(h.stagedTexts[0], /Directory: \/tmp/);
 	assert.match(h.stagedTexts[1], /Replaced staged command/);
 	assert.equal(h.messages.length, 0, "no duplicate staging message");
 	await h.run();
@@ -80,6 +85,7 @@ test("staging publishes exact invocation without execution; replacement runs onl
 	assert.equal(h.executions(), 1);
 	assert.equal(h.notices.at(-1), "No staged command.");
 	assert.ok(!h.commands.has("commands"));
+	assert.ok(!h.commands.has("staged"), "full script is inline; no viewer command");
 });
 
 test("approval card appears only after settlement and hides while another turn runs", async () => {
@@ -182,6 +188,16 @@ test("SSH preview omits transport flags without changing execution or Copy", () 
 	assert.ok(preview.includes("sudo -k --"));
 	assert.ok(copiedCommand(command).startsWith("ssh -t -o StrictHostKeyChecking=yes -- 172.16.1.52 "));
 	assert.deepEqual(commandInvocation(command).args.slice(0, 4), ["-t", "-o", "StrictHostKeyChecking=yes", "--"]);
+});
+
+test("review shows literal Python source and metadata without transport escaping", () => {
+	const script = "for i in range(2):\n    print(\"it's working\")\n";
+	const command = prepareCommand({ title: "Python", script, target: "adam@prod", root: true, interpreter: "python3", cwd: "/srv/a'b" }, "id", "/tmp");
+	assert.equal(commandMetadata(command), "SSH: adam@prod · Run as: root (sudo) · Interpreter: python3");
+	assert.ok(commandReview(command).endsWith(`Script:\n${script}`));
+	assert.ok(commandReview(command).includes("Directory: /srv/a'b"));
+	assert.ok(!commandReview(command).includes("'\"'\"'"));
+	assert.ok(copiedCommand(command).includes("StrictHostKeyChecking=yes"));
 });
 
 test("SSH invocation carries one quoted remote command with exact Python source", () => {

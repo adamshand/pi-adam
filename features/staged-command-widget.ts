@@ -23,7 +23,7 @@ export function commandResultCard(content: string, theme: Theme): Component {
 
 export type CommandAction = "run" | "copy" | "dismiss";
 type ButtonHit = { action: CommandAction; x: number; y: number; width: number };
-export type CommandCard = { title: string; location: string; command: string; isPreview?: boolean };
+export type CommandCard = { title: string; metadata?: string; location: string; command: string };
 
 /** Non-focusable: typing and transcript scrolling stay with Pi. */
 export class StagedCommandWidget implements Component {
@@ -31,13 +31,11 @@ export class StagedCommandWidget implements Component {
 	private readonly card: CommandCard;
 	private readonly theme: Theme;
 	private readonly activate: (action: CommandAction) => void;
-	private readonly maxCommandLines: () => number;
 	private readonly showKeyboardHint: () => boolean;
-	constructor(card: CommandCard, theme: Theme, activate: (action: CommandAction) => void, maxCommandLines: () => number = () => 6, showKeyboardHint: () => boolean = () => true) {
+	constructor(card: CommandCard, theme: Theme, activate: (action: CommandAction) => void, showKeyboardHint: () => boolean = () => true) {
 		this.card = card;
 		this.theme = theme;
 		this.activate = activate;
-		this.maxCommandLines = maxCommandLines;
 		this.showKeyboardHint = showKeyboardHint;
 	}
 
@@ -61,11 +59,9 @@ export class StagedCommandWidget implements Component {
 			this.theme.fg("muted", truncateToWidth(this.card.location, width)),
 			"",
 		];
-		if (this.card.isPreview) lines.push(this.theme.fg("dim", truncateToWidth("Command preview · SSH transport options omitted", width)));
-		const commandLines = wrapTextWithAnsi(`$ ${this.card.command.replaceAll("\t", "    ")}`, width);
-		const limit = Math.max(1, this.maxCommandLines());
-		lines.push(...commandLines.slice(0, limit).map(line => this.theme.fg("toolOutput", line)));
-		if (commandLines.length > limit) lines.push(this.theme.fg("warning", truncateToWidth("… full command in transcript; Copy preserves exact text", width)));
+		if (this.card.metadata) lines.splice(1, 0, this.theme.fg("muted", truncateToWidth(this.card.metadata, width)));
+		const commandLines = wrapTextWithAnsi(this.card.command.replaceAll("\t", "    "), width);
+		lines.push(...commandLines.map(line => this.theme.fg("toolOutput", line)));
 		lines.push("");
 		let row = "";
 		let x = 0;

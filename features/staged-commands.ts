@@ -6,7 +6,7 @@ import { captureInvocation, createCapture, readCapture } from "./staged-command-
 
 const Parameters = Type.Object({
 	title: Type.String({ minLength: 1, maxLength: 160 }),
-	script: Type.String({ minLength: 1, maxLength: 16000 }),
+	script: Type.String({ minLength: 1, maxLength: 16000, description: "Literal source code for the selected interpreter, preserving newlines and indentation. Do not shell-quote it or wrap it in ssh, sudo or python -c; use target, root and interpreter instead. Stage one coherent, reviewable operation." }),
 	target: Type.Optional(Type.String({ description: "Exact SSH destination (user@host or SSH alias). Omit for local execution." })),
 	interpreter: Type.Optional(Type.Union([Type.Literal("sh"), Type.Literal("bash"), Type.Literal("python3")])),
 	root: Type.Optional(Type.Boolean({ description: "Execute interpreter using sudo as root." })),
@@ -53,8 +53,12 @@ export function commandInvocation(command: StagedCommand) {
 	return { file: words[0], args: words.slice(1), cwd: command.cwd };
 }
 
-function heading(command: StagedCommand): string {
-	return `${command.title} · ${command.target ?? "local"}\nDirectory: ${command.cwd ?? "SSH login directory"}`;
+export function commandMetadata(command: StagedCommand): string {
+	return `${command.target ? `SSH: ${command.target}` : "Local"} · Run as: ${command.root ? "root (sudo)" : command.target ? "SSH login user" : "current user"} · Interpreter: ${command.interpreter}`;
+}
+
+export function commandReview(command: StagedCommand): string {
+	return `${command.title}\n${commandMetadata(command)}\nDirectory: ${command.cwd ?? "SSH login directory"}\n\nScript:\n${command.script}`;
 }
 
 export function commandLine(command: StagedCommand): string {
@@ -82,7 +86,7 @@ async function runInTerminal(ctx: ExtensionContext, command: StagedCommand): Pro
 		let output: string;
 		tui.stop();
 		try {
-			process.stdout.write(`\x1b[2J\x1b[H${heading(command)}\n\n${command.target ? "Command preview (SSH transport options omitted)\n" : ""}$ ${commandPreview(command)}\n\n`);
+			process.stdout.write(`\x1b[2J\x1b[H${commandReview(command)}\n\n`);
 			const result = spawnSync(invocation.file, invocation.args, { stdio: "inherit", cwd: invocation.cwd });
 			status = result.error ? `[command failed to launch: ${result.error.message}]`
 				: result.signal ? `[command interrupted · ${result.signal}; child/remote execution may still be running]`
@@ -95,7 +99,7 @@ async function runInTerminal(ctx: ExtensionContext, command: StagedCommand): Pro
 			tui.start();
 			tui.requestRender(true);
 		}
-		done(`${status}\n${command.target ? "Command preview (SSH transport options omitted)\n" : ""}$ ${commandPreview(command)}\n\n${output}`);
+		done(`${status}\n${commandReview(command)}\n\nOutput:\n${output}`);
 		return { render: () => [], invalidate() {} };
 	});
 }
@@ -150,21 +154,21 @@ export function registerStagedCommandsFeature(pi: ExtensionAPI): void {
 		if (ctx.mode !== "tui") return;
 		ctx.ui.setWidget(widgetKey, (tui, theme) => new StagedCommandWidget({
 			title: command.title,
-			location: command.cwd ?? "SSH login directory",
-			command: commandPreview(command),
-			isPreview: Boolean(command.target),
+			metadata: commandMetadata(command),
+			location: `Directory: ${command.cwd ?? "SSH login directory"}`,
+			command: command.script,
 		}, theme, action => {
 			// Finish mouse dispatch before removing widgets or handing over the terminal.
 			setImmediate(() => { void act(action, command, ctx).catch(error => {
 				ctx.ui.notify(error instanceof Error ? error.message : "Command action failed.", "error");
 			}); });
-		}, () => Math.max(1, Math.min(6, Math.floor(tui.terminal.rows / 3) - 8)), () => tui.mode !== "fullscreen"), { placement: "aboveEditor" });
+		}, () => tui.mode !== "fullscreen"), { placement: "aboveEditor" });
 	}
 
 	pi.registerTool({
 		name: "stage_command",
 		label: "Stage command for human",
-		description: "Stage a single local or SSH command. The user executes it with /run or cancels with /dismiss. Staging again replaces the previous command. NEVER executes or grants access. Use for human-controlled root/production access. Exact multiline scripts are preserved. Run shares captured terminal output with the agent and resumes it. Do not include secrets: scripts appear in the transcript and process arguments, and output is recorded to a private local file. Cleared on reload or session change. Finish your response after staging; do not poll or run it yourself.",
+		description: "Stage a single local or SSH command. The user executes it with /run or cancels with /dismiss. Staging again replaces the previous command. NEVER executes or grants access. Use for one coherent human-reviewed operation, interactive sudo, or a query not covered by inspection tools. Prefer sshro_* for supported read-only inspection; use ssh_exec only with an explicit human unrestricted grant. Never seek a broad grant just to avoid approvals, or silently work around protected reads. Pass literal source in script; use target/root/interpreter/cwd rather than embedding SSH, sudo or interpreter wrappers. Transport quoting is handled for you. The human reviews the source and execution metadata; Copy includes the runnable transport command. Exact multiline scripts are preserved. Run shares captured terminal output with the agent and resumes it. Do not include secrets: scripts appear in the transcript and process arguments, and output is recorded to a private local file. Cleared on reload or session change. Finish your response after staging; do not poll or run it yourself.",
 		parameters: Parameters,
 		outputSchema: Type.Object({ id: Type.String(), status: Type.Literal("pending") }),
 		async execute(_id, args, _signal, _update, ctx) {
@@ -175,7 +179,7 @@ export function registerStagedCommandsFeature(pi: ExtensionAPI): void {
 			// Keep the card hidden until agent_settled, when approval can actually run.
 			if (ctx.mode === "tui") ctx.ui.setWidget(widgetKey, undefined);
 			const result = { id: command.id, status: "pending" as const };
-			const text = `${replaced ? "Replaced staged command" : "Staged command"} · ${heading(command)}\n\n${command.target ? "Command preview (SSH transport options omitted)\n" : ""}$ ${commandPreview(command)}\n\n/run executes · /dismiss cancels`;
+			const text = `${replaced ? "Replaced staged command" : "Staged command"} · ${commandReview(command)}\n\n/run executes · /dismiss cancels`;
 			return { content: [{ type: "text", text }], details: result, structuredContent: result };
 		},
 	});
