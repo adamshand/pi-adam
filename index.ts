@@ -8,6 +8,7 @@ import { registerHerdrGitMetadataFeature } from "./features/herdr-git-metadata.t
 import { registerHerdrSessionNameFeature } from "./features/herdr-session-name.ts";
 import { registerHerdrTodosFeature } from "./features/herdr-todos.ts";
 import { registerMruFeature } from "./features/mru.ts";
+import { registerSessionSearchFeature } from "./features/session-search.ts";
 import { registerSaveImageFeature } from "./features/save-image.ts";
 import { registerTodosFeature } from "./features/todos.ts";
 import { registerTimersFeature } from "./features/timers.ts";
@@ -17,6 +18,7 @@ export default function piAdam(pi: ExtensionAPI): void {
 	registerAgentBrowserFeature(pi);
 	registerCodexImageFeature(pi);
 	registerSaveImageFeature(pi);
+	registerSessionSearchFeature(pi);
 	registerCompactionFeature(pi);
 	registerEnvFeature(pi);
 	registerFooterFeature(pi);
