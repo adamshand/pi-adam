@@ -10,14 +10,6 @@ const FAST_TIER = "priority";
 const FAST_ENTRY_TYPE = "pi-adam-codex-fast";
 const FAST_SHORTCUT = "alt+shift+tab" as const;
 
-const FAST_MODEL_IDS = new Set([
-	"gpt-5.4",
-	"gpt-5.5",
-	"gpt-5.6-sol",
-	"gpt-5.6-terra",
-	"gpt-5.6-luna",
-]);
-
 const FastEntrySchema = Type.Object({
 	enabled: Type.Optional(Type.Boolean()),
 });
@@ -42,12 +34,8 @@ export function isCodexModel(model: Model<Api> | undefined): model is Model<"ope
 	return model?.provider === CODEX_PROVIDER && model.api === CODEX_API;
 }
 
-export function isCodexFastModel(model: Model<Api> | undefined): model is Model<"openai-codex-responses"> {
-	return isCodexModel(model) && FAST_MODEL_IDS.has(model.id);
-}
-
 export function isCodexFastEligible(ctx: CodexFastEligibilityContext): boolean {
-	return isCodexFastModel(ctx.model) && ctx.modelRegistry.isUsingOAuth(ctx.model);
+	return isCodexModel(ctx.model) && ctx.modelRegistry.isUsingOAuth(ctx.model);
 }
 
 export function applyCodexFastTier(
@@ -92,7 +80,7 @@ export function registerCodexFastFeature(
 	const toggle = (ctx: ExtensionContext) => {
 		currentCtx = ctx;
 		if (!isCodexFastEligible(ctx) && !enabled) {
-			ctx.ui.notify("Fast mode requires a supported GPT-5.4–5.6 Codex model using ChatGPT OAuth", "warning");
+			ctx.ui.notify("Fast mode requires a Codex model using ChatGPT OAuth", "warning");
 			onChange();
 			return;
 		}
