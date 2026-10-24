@@ -12,7 +12,7 @@ Work (https://mahi.haume.nz) is Adam's inbox for ideas, agent captures and Feedb
 The API token is in the macOS Keychain. Never print it, echo it or put it in a file:
 
 ```bash
-work() { curl -sS -H "Authorization: Bearer $(security find-generic-password -s mahi.haume.nz -w)" -H 'Content-Type: application/json' "https://mahi.haume.nz$1" "${@:2}"; }
+work() { curl -sS -H "Authorization: Bearer $(security find-generic-password -s mahi.haume.nz -w)" -H 'Content-Type: application/json' "https://mahi.haume.nz${@:1:1}" "${@:2}"; }
 work '/api/v1/work?state=inbox'                    # also: state=inbox,open  project=…  goal=…  blocked=true
 work /api/v1/reports/FB-…                          # summary, reporter, context, artifacts, conversation
 work /api/v1/reports/FB-…/bundle -o /tmp/FB-….zip  # the diagnostic bundle (each download is logged)
