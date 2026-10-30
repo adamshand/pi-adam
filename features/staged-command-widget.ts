@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Text, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 
 /** A completed command is an inert transcript card, never another approval surface. */
 export function commandResultCard(content: string, theme: Theme): Component {
@@ -53,19 +53,12 @@ export class StagedCommandWidget implements Component {
 		];
 	}
 
-	/**
-	 * Actions come first: when the dock runs out of room Pi keeps a widget's top lines and drops the
-	 * rest, so a long script must never push the buttons out of reach.
-	 */
+	/** Only approval controls live in the dock; the full review scrolls in the transcript. */
 	private renderContent(width: number): string[] {
 		const lines = [this.theme.fg("accent", truncateToWidth(`# ${this.card.title}`, width))];
+		const hint = this.showKeyboardHint() ? "Review script above · /run executes · /dismiss cancels" : "Review script above · Run shares output with the agent";
+		lines.push(this.theme.fg("muted", truncateToWidth(hint, width)));
 		this.renderButtons(lines, width);
-		const hint = this.showKeyboardHint() ? "Run shares output with the agent · /run executes · /dismiss cancels" : "Run shares output with the agent";
-		lines.push(this.theme.fg("muted", truncateToWidth(hint, width)), "");
-		if (this.card.metadata) lines.push(this.theme.fg("muted", truncateToWidth(this.card.metadata, width)));
-		lines.push(this.theme.fg("muted", truncateToWidth(this.card.location, width)), "");
-		const commandLines = wrapTextWithAnsi(this.card.command.replaceAll("\t", "    "), width);
-		lines.push(...commandLines.map(line => this.theme.fg("toolOutput", line)));
 		return lines;
 	}
 

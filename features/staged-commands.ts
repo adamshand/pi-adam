@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { copyToClipboard, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { commandResultCard, StagedCommandWidget, type CommandAction } from "./staged-command-widget.ts";
 import { Type, type Static } from "typebox";
+import { Text } from "@earendil-works/pi-tui";
 import { captureInvocation, createCapture, readCapture } from "./staged-command-output.ts";
 
 const Parameters = Type.Object({
@@ -170,6 +171,12 @@ export function registerStagedCommandsFeature(pi: ExtensionAPI): void {
 		label: "Stage command for human",
 		description: "Stage a single local or SSH command. The user executes it with /run or cancels with /dismiss. Staging again replaces the previous command. NEVER executes or grants access. Use for one coherent human-reviewed operation, interactive sudo, or a query not covered by inspection tools. Prefer sshro_* for supported read-only inspection; use ssh_exec only with an explicit human unrestricted grant. Never seek a broad grant just to avoid approvals, or silently work around protected reads. Pass literal source in script; use target/root/interpreter/cwd rather than embedding SSH, sudo or interpreter wrappers. Transport quoting is handled for you. The human reviews the source and execution metadata; Copy includes the runnable transport command. Exact multiline scripts are preserved. Run shares captured terminal output with the agent and resumes it. Do not include secrets: scripts appear in the transcript and process arguments, and output is recorded to a private local file. Cleared on reload or session change. Finish your response after staging; do not poll or run it yourself.",
 		parameters: Parameters,
+		renderCall(args, theme) {
+			return new Text(theme.fg("toolTitle", args.title || "Stage command"), 0, 0);
+		},
+		renderResult(result) {
+			return new Text(result.content.filter(block => block.type === "text").map(block => block.text).join("\n").replaceAll("\t", "    "), 0, 0);
+		},
 		outputSchema: Type.Object({ id: Type.String(), status: Type.Literal("pending") }),
 		async execute(_id, args, _signal, _update, ctx) {
 			if (running) throw new Error("A human-approved command is still running.");

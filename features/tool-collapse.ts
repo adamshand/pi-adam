@@ -295,7 +295,7 @@ export function wrapToolRenderers(toolName: string, base: ToolRenderers | undefi
 			hooks.remember(context.toolCallId, context.invalidate);
 			const state = rowState(context);
 			state.folded =
-				hooks.isFolded(context.toolCallId) && !context.isPartial && !context.isError && !context.expanded;
+				toolName !== "stage_command" && hooks.isFolded(context.toolCallId) && !context.isPartial && !context.isError && !context.expanded;
 			if (state.folded) return foldedLine(toolName, args, theme, context);
 
 			const inner = base?.renderCall

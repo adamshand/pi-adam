@@ -49,18 +49,16 @@ test("card exposes mouse actions without taking keyboard focus or intercepting s
 	assert.equal(widget.handleMouse(click(0, y)), undefined);
 });
 
-test("bordered card spaces the command and can hide keyboard hints", () => {
+test("compact approval bar puts buttons at the bottom and can hide keyboard hints", () => {
 	const widget = new StagedCommandWidget({ title: "Check disk", location: "/tmp", command: "du -sh /opt" }, testTheme(), () => {}, () => false);
 	const lines = widget.render(60);
 	assert.ok(lines[0].startsWith("┌"));
 	assert.ok(lines.at(-1)!.startsWith("└"));
 	assert.match(lines[1], /^│  # Check disk/);
-	assert.match(lines[2], /^│  \[ ▶ Run \]/);
-	assert.match(lines[3], /^│  Run shares output with the agent +│$/);
-	assert.match(lines[4], /^│ +│$/);
-	assert.match(lines[5], /^│  \/tmp/);
-	assert.match(lines[6], /^│ +│$/);
-	assert.match(lines[7], /^│  du -sh \/opt/);
+	assert.match(lines[2], /Review script above/);
+	assert.match(lines[3], /^│  \[ ▶ Run \]/);
+	assert.equal(lines.length, 5);
+	assert.ok(!lines.join("\n").includes("du -sh"));
 	assert.ok(!lines.join("\n").includes("/dismiss"));
 	assert.equal(widget.handleMouse(click(0, 2)), undefined, "border isn't a button");
 	assert.equal(widget.handleMouse(click(2, 2)), undefined, "padding isn't a button");
@@ -76,12 +74,12 @@ test("buttons stay reachable when the dock clips a long script", () => {
 	assert.deepEqual(actions, ["run"]);
 });
 
-test("card preserves the full script on narrow screens, wraps buttons and rebuilds hit regions on resize", () => {
+test("approval bar stays compact on narrow screens and rebuilds hit regions on resize", () => {
 	const actions: CommandAction[] = [];
 	const widget = new StagedCommandWidget({ title: "日本語 title", location: "a very long directory", command: "a\n".repeat(1000) }, testTheme(), action => actions.push(action));
 	for (const width of [80, 20, 10, 4, 1]) {
 		const lines = widget.render(width);
-		assert.ok(lines.filter(line => line.includes("a")).length >= 1000);
+		assert.ok(lines.length <= 7);
 		assert.ok(lines.every(line => visibleWidth(line) <= width));
 	}
 	const lines = widget.render(20);
