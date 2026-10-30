@@ -55,13 +55,25 @@ test("bordered card spaces the command and can hide keyboard hints", () => {
 	assert.ok(lines[0].startsWith("┌"));
 	assert.ok(lines.at(-1)!.startsWith("└"));
 	assert.match(lines[1], /^│  # Check disk/);
-	assert.match(lines[2], /^│  \/tmp/);
-	assert.match(lines[3], /^│ +│$/);
-	assert.match(lines[4], /^│  du -sh \/opt/);
-	assert.match(lines[5], /^│ +│$/);
+	assert.match(lines[2], /^│  \[ ▶ Run \]/);
+	assert.match(lines[3], /^│  Run shares output with the agent +│$/);
+	assert.match(lines[4], /^│ +│$/);
+	assert.match(lines[5], /^│  \/tmp/);
+	assert.match(lines[6], /^│ +│$/);
+	assert.match(lines[7], /^│  du -sh \/opt/);
 	assert.ok(!lines.join("\n").includes("/dismiss"));
-	assert.equal(widget.handleMouse(click(0, 6)), undefined, "border isn't a button");
-	assert.equal(widget.handleMouse(click(2, 6)), undefined, "padding isn't a button");
+	assert.equal(widget.handleMouse(click(0, 2)), undefined, "border isn't a button");
+	assert.equal(widget.handleMouse(click(2, 2)), undefined, "padding isn't a button");
+});
+
+test("buttons stay reachable when the dock clips a long script", () => {
+	const actions: CommandAction[] = [];
+	const widget = new StagedCommandWidget({ title: "Long", location: "/tmp", command: "echo hi\n".repeat(500) }, testTheme(), action => actions.push(action));
+	const visible = widget.render(80).slice(0, 6);
+	const y = visible.findIndex(line => line.includes("[ ▶ Run ]"));
+	assert.ok(y >= 0, "Run is within the first lines Pi keeps");
+	widget.handleMouse(click(visible[y].indexOf("[ ▶ Run ]"), y));
+	assert.deepEqual(actions, ["run"]);
 });
 
 test("card preserves the full script on narrow screens, wraps buttons and rebuilds hit regions on resize", () => {

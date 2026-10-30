@@ -53,16 +53,23 @@ export class StagedCommandWidget implements Component {
 		];
 	}
 
+	/**
+	 * Actions come first: when the dock runs out of room Pi keeps a widget's top lines and drops the
+	 * rest, so a long script must never push the buttons out of reach.
+	 */
 	private renderContent(width: number): string[] {
-		const lines = [
-			this.theme.fg("accent", truncateToWidth(`# ${this.card.title}`, width)),
-			this.theme.fg("muted", truncateToWidth(this.card.location, width)),
-			"",
-		];
-		if (this.card.metadata) lines.splice(1, 0, this.theme.fg("muted", truncateToWidth(this.card.metadata, width)));
+		const lines = [this.theme.fg("accent", truncateToWidth(`# ${this.card.title}`, width))];
+		this.renderButtons(lines, width);
+		const hint = this.showKeyboardHint() ? "Run shares output with the agent · /run executes · /dismiss cancels" : "Run shares output with the agent";
+		lines.push(this.theme.fg("muted", truncateToWidth(hint, width)), "");
+		if (this.card.metadata) lines.push(this.theme.fg("muted", truncateToWidth(this.card.metadata, width)));
+		lines.push(this.theme.fg("muted", truncateToWidth(this.card.location, width)), "");
 		const commandLines = wrapTextWithAnsi(this.card.command.replaceAll("\t", "    "), width);
 		lines.push(...commandLines.map(line => this.theme.fg("toolOutput", line)));
-		lines.push("");
+		return lines;
+	}
+
+	private renderButtons(lines: string[], width: number): void {
 		let row = "";
 		let x = 0;
 		const buttons: { action: CommandAction; label: string }[] = [
@@ -79,9 +86,7 @@ export class StagedCommandWidget implements Component {
 			row += this.theme.fg(button.action === "run" ? "success" : "muted", label);
 			x += size;
 		}
-		lines.push(row, this.theme.fg("muted", truncateToWidth("Run shares output with the agent", width)));
-		if (this.showKeyboardHint()) lines.push(this.theme.fg("dim", truncateToWidth("/run executes · /dismiss cancels", width)));
-		return lines;
+		lines.push(row);
 	}
 
 	handleMouse(event: TuiMouseEvent) {
