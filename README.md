@@ -18,6 +18,7 @@ Personal pi quality-of-life extension.
 - `/env` lists variables declared by those files with values redacted.
 - `/codex-usage` shows Codex usage, reset times, and available banked resets; `/codex-usage-refresh` refreshes it immediately.
 - `/pi-adam-status` reports model, Fast injection, usage freshness/errors, image eligibility, footer cost, and context diagnostics.
+- In the new Herdr Mac app, the personal `adam-status` footer shows the focused Pi pane's model, thinking/Fast mode, speed, cost, context, and Codex limits. Click model/thinking to cycle or Fast to toggle while idle, without typing into the terminal or changing global defaults. Pi hides its own footer only after the native mod acknowledges its runtime; elsewhere the terminal footer remains unchanged. Existing sessions need `/reload` once. See [`herdr/app/README.md`](herdr/app/README.md#native-pi-footer).
 - Slash-command usage is stored in `state.json` next to this extension.
 - `/pi-adam-mru` shows the recent list; `/pi-adam-mru reset` clears it.
 - Inside Herdr, Pi `/name` values automatically rename the tab and appear in the agents panel.
@@ -114,7 +115,9 @@ Pi must remain running for on-time delivery. Timers do not launch Pi or wake a s
 
 ## Herdr agent metadata
 
-When Pi runs inside Herdr, `/name bugs` renames the current tab. Pi also reports the repository at its session working directory as the custom Agent tokens `$branch` and `$git_status`. The latter renders compact values such as `!3 ?2 ↑1 ↓4`: `!` counts distinct changed tracked files (staged, unstaged, or conflicted), `?` counts untracked files, and the arrows show upstream ahead/behind commits. Zero-value parts disappear, and the whole token disappears for a clean branch synchronized with its upstream.
+When Pi runs inside Herdr, `/name bugs` renames Pi's own tab. In the new Mac app, the integration resolves `HC_TERMINAL_ID` through `hc get` and sends an explicit `tab.rename` command to `herdr-app`, even when another tab is focused. Clearing the name restores automatic numbering; an unnamed startup/reload leaves manual tab names alone. Run `/reload` once in existing Pi sessions after updating the extension. The old Herdr CLI remains supported.
+
+In old Herdr, Pi also reports the repository at its session working directory as the custom Agent tokens `$branch` and `$git_status`. The latter renders compact values such as `!3 ?2 ↑1 ↓4`: `!` counts distinct changed tracked files (staged, unstaged, or conflicted), `?` counts untracked files, and the arrows show upstream ahead/behind commits. Zero-value parts disappear, and the whole token disappears for a clean branch synchronized with its upstream.
 
 For example, show the session name with its per-agent Git context using this layout in `~/.config/herdr/config.toml`:
 
@@ -159,6 +162,35 @@ On startup, existing per-Todo `.pi/work-items/*.json` and legacy Todo Markdown a
 Todo writes use atomic replacement and a short cross-process `.pi/todos.lock` to serialize updates from Pi and Herdr. If a writer crashes, verify the PID in `todos.lock/owner.json` has exited before removing the lock directory. Malformed plans and stale full-item writes are rejected, not overwritten.
 
 There is **no automatic cleanup** on exit, startup, completion, or by age. Completed Todos remain available for review/reopening. `/todos clear` still removes only completed Todos from the current session after confirmation, leaving other sessions alone. Empty session files are retained too; cleanup policy is a separate decision.
+
+## Herdr Mac app Todos sidebar
+
+The new `herdr-app` has a native **Todos** panel beside **Files** and **Changes**, with **Todos | Ideas** tabs inside it.
+Its source is in [herdr/app](herdr/app/README.md); this is separate from the old
+Herdr terminal plugin below.
+
+- Read-only: titles, status, intent, progress, nested checklists, and collapsible done history.
+- Follows the **focused terminal's Pi session**, not the latest plan in a project.
+- The Pi extension publishes `pi-adam.todos` on its `HC_TERMINAL_ID` using `hc label`.
+  The label contains a versioned session reference and the exact existing Todo file,
+  never a second copy of the Todo data. It changes on session replacement and is
+  removed on orderly shutdown only if that runtime still owns the label.
+- The panel watches the local Todo directory; visible-only reads recover missed
+  changes and handle remote sessions on the terminal's own machine.
+- Existing Pi sessions need `/reload` once for the bridge; future sessions connect
+  automatically. Non-TUI/headless sessions don't publish a reference.
+- **Todos** are scoped to the focused Pi session; **Ideas** are scoped to its project
+  (or the focused folder for a shell). Ideas include every active Work source,
+  grouped into Inbox and Open, with expandable Markdown and Open in Work links.
+- Ideas show the existing cached snapshot before refreshing, then refresh every
+  30 seconds only while the Ideas view is visible. Stale/offline and unassigned
+  scope are explicit. Refresh does **not** replay or retry queued captures.
+- No direct Todo/Idea writes, editing controls, new shortcuts, or automatic
+  sidebar opening. Existing Todo tool locking and Work-sync semantics are unchanged.
+- The Ideas reader is a local Node helper using the existing Work client, environment
+  and Keychain. Tokens never pass through labels, command arguments or UI files.
+  The personal layout configures its local path. Remote Pi sessions publish their
+  own helper/Node paths after reload, with no fallback to local project data.
 
 ## Herdr board
 
@@ -252,7 +284,9 @@ Use `/review-changes <goal and acceptance criteria>` to request the dual review 
 - `skills/orchestrate/SKILL.md` — bounded scout and dual-review coordination policy
 - `features/compaction.ts` — agent-requested compaction at a completed-run boundary
 - `features/env.ts` — dotenv loading and `/env`
-- `features/footer.ts` — custom session footer
+- `features/footer.ts` — custom session footer and metrics lifecycle
+- `features/herdr-app-footer.ts` — nonsecret native footer bridge with owned cleanup
+- `features/herdr-app-footer-controls.ts` — private, session-scoped model/thinking/Fast controls
 - `features/codex-fast.ts` — guarded, session-persisted Codex Fast mode
 - `features/codex-image.ts` — Codex-hosted image generation and file saving
 - `features/codex-image-utils.ts` — completed-image payload and SSE parsing helpers

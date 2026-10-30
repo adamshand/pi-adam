@@ -25,6 +25,8 @@ export type CodexFastSnapshot = {
 	lastInjectedModel?: string;
 };
 
+export type CodexFastFeature = { getState(): CodexFastSnapshot; toggle(ctx: ExtensionContext): void };
+
 type CodexFastEligibilityContext = {
 	model: Model<Api> | undefined;
 	modelRegistry: Pick<ExtensionContext["modelRegistry"], "isUsingOAuth">;
@@ -50,7 +52,7 @@ export function applyCodexFastTier(
 export function registerCodexFastFeature(
 	pi: ExtensionAPI,
 	onChange: () => void,
-): () => CodexFastSnapshot {
+): CodexFastFeature {
 	let enabled = false;
 	let currentCtx: ExtensionContext | undefined;
 	let lastInjectedAt: number | undefined;
@@ -127,5 +129,5 @@ export function registerCodexFastFeature(
 		currentCtx = undefined;
 	});
 
-	return snapshot;
+	return { getState: snapshot, toggle };
 }

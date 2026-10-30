@@ -1,9 +1,12 @@
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { isCodexModel, registerCodexFastFeature } from "./codex-fast.ts";
 import { isCodexImageModel } from "./codex-image.ts";
 import { registerCodexUsageFeature } from "./codex-usage.ts";
 import { centeredFooter, readFooterGitStats, type FooterGitStats } from "./footer-git.ts";
+import { HerdrFooterBridge } from "./herdr-app-footer.ts";
+import { applyFooterAction, footerModelRotation, FooterControlServer, type FooterAction, type FooterControlEndpoint } from "./herdr-app-footer-controls.ts";
 
 type Rgb = readonly [red: number, green: number, blue: number];
 type ContextUsage = ReturnType<ExtensionContext["getContextUsage"]>;
@@ -85,8 +88,15 @@ function formatTimestamp(value: number | undefined): string {
 	return value ? new Date(value).toLocaleTimeString() : "never";
 }
 
-export function registerFooterFeature(pi: ExtensionAPI): void {
+export function registerFooterFeature(
+	pi: ExtensionAPI,
+	environment: Readonly<Record<string, string | undefined>> = process.env,
+): void {
 	let footerInstalled = false;
+	let currentCtx: ExtensionContext | undefined;
+	let bridge: HerdrFooterBridge | undefined;
+	let controlServer: FooterControlServer | undefined;
+	let controlEndpoint: FooterControlEndpoint | undefined;
 	let gitStats: FooterGitStats | undefined;
 	let gitRevision = 0;
 	const refreshGit = async (ctx: ExtensionContext) => {
@@ -100,15 +110,43 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 		}
 		if (revision !== gitRevision) return;
 		gitStats = next;
-		requestFooterRender?.();
+		requestRender();
 	};
 	let thinkingLevel = "high";
 	let lastSpeed: number | undefined;
 	let assistantStartTime: number | undefined;
 	let requestFooterRender: (() => void) | undefined;
 	let metrics: FooterMetrics = { cost: 0, contextUsage: undefined };
-	const requestRender = () => requestFooterRender?.();
-	const getCodexFast = registerCodexFastFeature(pi, requestRender);
+	const publishMetrics = () => {
+		const ctx = currentCtx;
+		if (!ctx || ctx.mode !== "tui" || !bridge) return Promise.resolve();
+		const fast = codexFast.getState();
+		const usage = codexUsage.getState();
+		const actions: FooterAction[] = [];
+		if (controlEndpoint) {
+			if (footerModelRotation(ctx).length > 1) actions.push("model");
+			if (ctx.model && getSupportedThinkingLevels(ctx.model).length > 1) actions.push("thinking");
+			if (fast.eligible || fast.enabled) actions.push("fast");
+		}
+		return bridge.publish(ctx.sessionManager.getSessionId(), {
+			model: ctx.model?.id ?? "no-model",
+			thinking: thinkingLevel,
+			fast: isCodexModel(ctx.model) ? fast.enabled && fast.eligible ? "on" : "off" : null,
+			cost: metrics.cost,
+			contextTokens: metrics.contextUsage?.tokens ?? 0,
+			contextWindow: metrics.contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0,
+			speed: lastSpeed,
+			git: gitStats,
+			controls: controlEndpoint ? { ...controlEndpoint, idle: ctx.isIdle() && !ctx.hasPendingMessages(), actions } : undefined,
+			usage: isCodexModel(ctx.model) && usage.eligible
+				? { status: usage.status, ...usage.snapshot } : undefined,
+		});
+	};
+	const requestRender = () => {
+		requestFooterRender?.();
+		void publishMetrics();
+	};
+	const codexFast = registerCodexFastFeature(pi, requestRender);
 	const codexUsage = registerCodexUsageFeature(pi, requestRender);
 
 	const refreshCost = (ctx: ExtensionContext) => {
@@ -126,7 +164,7 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 		description: "Show pi-adam model, Fast, usage, image, and footer diagnostics",
 		handler: async (_args, ctx) => {
 			refreshMetrics(ctx);
-			const fast = getCodexFast();
+			const fast = codexFast.getState();
 			const usage = codexUsage.getState();
 			const context = metrics.contextUsage;
 			const contextLimit = context?.contextWindow ?? ctx.model?.contextWindow ?? 0;
@@ -148,12 +186,13 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 
 	pi.on("thinking_level_select", (event) => {
 		thinkingLevel = event.level;
-		requestFooterRender?.();
+		requestRender();
 	});
 
 	pi.on("model_select", (_event, ctx) => {
+		currentCtx = ctx;
 		refreshContext(ctx);
-		requestFooterRender?.();
+		requestRender();
 	});
 
 	pi.on("message_start", (event) => {
@@ -169,7 +208,7 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 			}
 			assistantStartTime = undefined;
 		}
-		requestFooterRender?.();
+		requestRender();
 	});
 
 	pi.on("turn_end", (event, ctx) => {
@@ -182,30 +221,51 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 				costUpdatedAt: Date.now(),
 			};
 		}
-		requestFooterRender?.();
+		requestRender();
 	});
 
 	pi.on("agent_settled", (_event, ctx) => {
 		void refreshGit(ctx);
 		refreshContext(ctx);
-		requestFooterRender?.();
+		requestRender();
 	});
 
 	pi.on("session_compact", (_event, ctx) => {
 		refreshMetrics(ctx);
-		requestFooterRender?.();
+		requestRender();
 	});
 
 	pi.on("session_tree", (_event, ctx) => {
 		refreshMetrics(ctx);
-		requestFooterRender?.();
+		requestRender();
 	});
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		thinkingLevel = pi.getThinkingLevel();
 		lastSpeed = undefined;
 		assistantStartTime = undefined;
 		if (ctx.mode !== "tui") return;
+		currentCtx = ctx;
+		bridge = new HerdrFooterBridge(pi, () => requestFooterRender?.(), environment);
+		if (environment.HC_TERMINAL_ID) {
+			controlServer = new FooterControlServer();
+			try {
+				controlEndpoint = await controlServer.start(ctx.sessionManager.getSessionId(), async action => {
+					const context = currentCtx;
+					if (!context) return { ok: false, error: "The Pi session has ended." };
+					const result = await applyFooterAction(action, pi, context, codexFast.toggle);
+					thinkingLevel = pi.getThinkingLevel();
+					refreshContext(context);
+					await publishMetrics();
+					return result;
+				});
+			} catch {
+				// Control setup failure must not remove the read-only native footer.
+				await controlServer.stop().catch(() => undefined);
+				controlServer = undefined;
+				controlEndpoint = undefined;
+			}
+		}
 		refreshMetrics(ctx);
 		gitStats = undefined;
 		void refreshGit(ctx);
@@ -225,6 +285,7 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 				},
 				invalidate() {},
 				render(width: number): string[] {
+					if (bridge?.active) return [];
 					const palette = getFooterPalette(theme);
 					const contextUsage = metrics.contextUsage;
 					const ctxLimit = contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
@@ -275,7 +336,7 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 
 					const modelStr = colorize(palette.primary, ctx.model?.id ?? "no-model");
 					const levelStr = styleThinkingLevel(theme, palette, thinkingLevel);
-					const fast = getCodexFast();
+					const fast = codexFast.getState();
 					const fastStr = showCodex
 						? fast.enabled && fast.eligible
 							? colorize(palette.error, "fast")
@@ -319,9 +380,22 @@ export function registerFooterFeature(pi: ExtensionAPI): void {
 			};
 		});
 		footerInstalled = true;
+		await publishMetrics();
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => {
+	pi.on("agent_start", (_event, ctx) => {
+		if (ctx.mode !== "tui") return;
+		currentCtx = ctx;
+		return publishMetrics();
+	});
+
+	pi.on("session_shutdown", async (_event, ctx) => {
+		currentCtx = undefined;
+		await controlServer?.stop();
+		controlServer = undefined;
+		controlEndpoint = undefined;
+		await bridge?.stop();
+		bridge = undefined;
 		if (footerInstalled && ctx.mode === "tui") ctx.ui.setFooter(undefined);
 		footerInstalled = false;
 		gitRevision += 1;

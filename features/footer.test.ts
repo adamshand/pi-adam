@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { registerFooterFeature } from "./footer.ts";
+import { HERDR_FOOTER_HOST_LABEL, HERDR_FOOTER_LABEL } from "./herdr-app-footer.ts";
+import { sendFooterControl } from "../herdr/app/status/control-client.js";
 import { createTestExtensionApi, createTestExtensionContext } from "./test-extension.ts";
 
 type TestEvent = {
@@ -63,6 +65,7 @@ test("footer caches branch cost and context between lifecycle updates", async ()
 			getApiKeyForProvider: async () => undefined,
 		},
 		sessionManager: {
+			getSessionId: () => "test-session",
 			getEntries: () => [],
 			getBranch: () => {
 				branchReads += 1;
@@ -91,7 +94,7 @@ test("footer caches branch cost and context between lifecycle updates", async ()
 			return { code: 0, stdout: args[0] === "diff" ? "142\t38\tfile\0" : "2\t3\n" };
 		},
 	});
-	registerFooterFeature(pi);
+	registerFooterFeature(pi, {});
 	const emit = async (name: string, event: TestEvent = { type: name }) => {
 		for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
 	};
@@ -155,4 +158,74 @@ test("footer caches branch cost and context between lifecycle updates", async ()
 	assert.match(notification, /Context: 250\/1000 \(25\.0%\)/);
 
 	await emit("session_shutdown");
+});
+
+test("Herdr uses a zero-line Pi footer and publishes refreshed session metrics", async () => {
+	const handlers = new Map<string, EventHandler[]>();
+	let factory: FooterFactory | undefined;
+	let thinking: ReturnType<ExtensionAPI["getThinkingLevel"]> = "medium";
+	let gitAdded = 142;
+	let gitUnavailable = false;
+	type CoreLabels = Record<string, string>;
+	const labels: CoreLabels = { "herdr.tab": "tab7" };
+	const ctx = createTestExtensionContext({
+		mode: "tui", model: model(), scopedModels: [],
+		isIdle: () => true, hasPendingMessages: () => false,
+		modelRegistry: { isUsingOAuth: () => false, getAvailable: () => [model()] },
+		sessionManager: { getSessionId: () => "session7", getEntries: () => [], getBranch: () => [] },
+		getContextUsage: () => ({ tokens: 250, contextWindow: 1000, percent: 25 }),
+		ui: { setFooter(value: FooterFactory | undefined) { factory = value; } },
+	});
+	const pi = createTestExtensionApi({
+		on(name: string, handler: EventHandler) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
+		registerCommand() {}, registerShortcut() {}, getThinkingLevel: () => thinking,
+		setThinkingLevel: (level: ReturnType<ExtensionAPI["getThinkingLevel"]>) => { thinking = level; },
+		async exec(command: string, args: string[]) {
+			if (command === "git") return gitUnavailable
+				? { code: 1, stdout: "" }
+				: { code: 0, stdout: args[0] === "diff" ? `${gitAdded}\t38\tfile\0` : "2\t3\n" };
+			if (command !== "hc") return { code: 1, stdout: "" };
+			if (args[0] === "get") {
+				if (labels[HERDR_FOOTER_LABEL]) labels[HERDR_FOOTER_HOST_LABEL] = JSON.parse(labels[HERDR_FOOTER_LABEL]).owner;
+				return { code: 0, stdout: JSON.stringify({ labels }) };
+			}
+			const assignment = args[2];
+			labels[assignment.slice(0, assignment.indexOf("="))] = assignment.slice(assignment.indexOf("=") + 1);
+			return { code: 0, stdout: "" };
+		},
+	});
+	registerFooterFeature(pi, { HC_TERMINAL_ID: "t7" });
+	const emit = async (name: string, event: TestEvent = { type: name }) => {
+		for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
+	};
+	await emit("session_start");
+	assert.ok(factory);
+	const component = factory(
+		{ requestRender() {} },
+		{ name: "dark", fg: (_name, text) => text, bold: text => text },
+		{ onBranchChange() { return () => undefined; } },
+	);
+	assert.deepEqual(component.render(120), []);
+	assert.equal(JSON.parse(labels[HERDR_FOOTER_LABEL]).contextTokens, 250);
+	await emit("agent_start"); // Drain the asynchronous startup Git publication.
+	assert.deepEqual(JSON.parse(labels[HERDR_FOOTER_LABEL]).git, { added: 142, removed: 38, ahead: 2, behind: 3 });
+	const endpoint = JSON.parse(labels[HERDR_FOOTER_LABEL]).controls;
+	assert.equal(endpoint.idle, true);
+	assert.deepEqual(await sendFooterControl(endpoint, "thinking"), { ok: true });
+	assert.equal(JSON.parse(labels[HERDR_FOOTER_LABEL]).thinking, "high");
+	gitAdded = 200;
+	await emit("turn_end", { type: "turn_end", message: { role: "assistant", usage: { output: 0, cost: { total: 1.5 } } } });
+	await new Promise<void>(resolve => setImmediate(resolve));
+	await emit("agent_start");
+	assert.equal(JSON.parse(labels[HERDR_FOOTER_LABEL]).cost, 1.5);
+	assert.equal(JSON.parse(labels[HERDR_FOOTER_LABEL]).git.added, 200);
+	gitUnavailable = true;
+	await emit("agent_settled");
+	await new Promise<void>(resolve => setImmediate(resolve));
+	await emit("agent_start");
+	assert.equal(JSON.parse(labels[HERDR_FOOTER_LABEL]).git, undefined, "failed Git reads must clear stale native counts");
+	assert.equal(JSON.parse(labels[HERDR_FOOTER_LABEL]).session_id, "session7");
+	await emit("session_shutdown");
+	assert.equal(factory, undefined);
+	assert.equal(labels[HERDR_FOOTER_LABEL], "");
 });
