@@ -5,6 +5,7 @@ import { registerStagedCommandsFeature } from "./features/staged-commands.ts";
 import { registerCompactionFeature } from "./features/compaction.ts";
 import { registerEnvFeature } from "./features/env.ts";
 import { registerFooterFeature } from "./features/footer.ts";
+import { registerHerdrAppTodosFeature } from "./features/herdr-app-todos.ts";
 import { registerHerdrGitMetadataFeature } from "./features/herdr-git-metadata.ts";
 import { registerHerdrSessionNameFeature } from "./features/herdr-session-name.ts";
 import { registerHerdrTodosFeature } from "./features/herdr-todos.ts";
@@ -29,6 +30,7 @@ export default function piAdam(pi: ExtensionAPI): void {
 	registerHerdrSessionNameFeature(pi);
 	registerTodosFeature(pi);
 	registerHerdrTodosFeature(pi);
+	registerHerdrAppTodosFeature(pi);
 	registerMruFeature(pi);
 	registerTurnStampFeature(pi);
 	registerTimersFeature(pi);

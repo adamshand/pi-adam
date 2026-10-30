@@ -117,7 +117,7 @@ export class WorkClient {
 		try { return (await exec("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { timeout: this.timeout })).stdout.trim(); }
 		catch { return resolve(cwd); }
 	}
-	async project(cwd) {
+	async project(cwd, cachedOnly = false) {
 		const root = await this.root(cwd);
 		const config = await jsonFile(join(root, ".pi/work.json"), null);
 		if (config !== null) {
@@ -126,7 +126,10 @@ export class WorkClient {
 		}
 		const cache = join(this.stateDir, `work-projects-${this.scope}.json`);
 		let projects;
-		try {
+		if (cachedOnly) {
+			projects = await jsonFile(cache, null);
+			if (!projects) throw new WorkError("Work project cache unavailable; refresh online to resolve this project.");
+		} else try {
 			const result = Parse(Type.Object({ projects: Type.Array(Type.Object({ slug: Type.String() })) }), await this.request("/api/v1/projects"));
 			projects = result.projects;
 			await atomicJson(cache, projects);
@@ -139,13 +142,33 @@ export class WorkClient {
 		return { root, project: projects.some((p) => p.slug === candidate) ? candidate : null };
 	}
 	cachePath(root, project) { return join(this.stateDir, `work-list-${this.scope}-${createHash("sha256").update(JSON.stringify([root, project])).digest("hex").slice(0, 16)}.json`); }
-	async list(cwd) {
+	async list(cwd) { return this.listSnapshot(cwd, true); }
+	/** GETs and local cache maintenance only: never replays the outbox. */
+	async listReadOnly(cwd) {
+		const result = await this.listSnapshot(cwd, false);
+		return { ...result, items: Parse(Type.Array(Item), result.items).filter(item => ["inbox", "open"].includes(item.state) && (item.project?.slug ?? null) === result.project) };
+	}
+	/** Resolve scope using local configuration/project cache only; no credentials or HTTP. */
+	async cachedList(cwd) {
+		try {
+			const { root, project } = await this.project(cwd, true);
+			const cached = await jsonFile(this.cachePath(root, project), null);
+			if (!cached) return { items: [], project, scopeResolved: true, stale: true, fetchedAt: null, error: "No cached Ideas yet." };
+			const items = Parse(Type.Array(Item), cached.items).filter(item => ["inbox", "open"].includes(item.state) && (item.project?.slug ?? null) === project);
+			return { ...cached, items, project, scopeResolved: true, stale: true, error: "Cached Ideas; awaiting refresh." };
+		} catch (error) {
+			return { items: [], project: null, scopeResolved: false, stale: true, fetchedAt: null, error: error instanceof WorkError ? error.message : "Cached Ideas unavailable." };
+		}
+	}
+	async listSnapshot(cwd, replayOutbox) {
 		const root = await this.root(cwd);
 		let cachePath;
+		let scopeProject = null;
 		let outboxError;
 		try {
-			await this.flush().catch((error) => { outboxError = error instanceof WorkError ? error.message : "Work outbox could not be flushed."; });
+			if (replayOutbox) await this.flush().catch((error) => { outboxError = error instanceof WorkError ? error.message : "Work outbox could not be flushed."; });
 			const { project } = await this.project(cwd);
+			scopeProject = project;
 			cachePath = this.cachePath(root, project);
 			const query = new URLSearchParams({ state: "inbox,open" });
 			if (project) query.set("project", project);
@@ -153,12 +176,12 @@ export class WorkClient {
 			// An omitted project filter means ALL items to Work, not only unassigned ones.
 			const items = result.work_items.filter((item) => (item.project?.slug ?? null) === project);
 			const pending = (await this.entries()).filter((entry) => entry.url === this.url);
-			const list = { items, project, stale: false, error: outboxError, fetchedAt: new Date().toISOString(), outbox: { pending: pending.length, blocked: pending.filter((entry) => entry.blocked).length, path: this.outbox } };
+			const list = { items, project, scopeResolved: true, stale: false, error: outboxError, fetchedAt: new Date().toISOString(), outbox: { pending: pending.length, blocked: pending.filter((entry) => entry.blocked).length, path: this.outbox } };
 			await atomicJson(cachePath, list);
 			return list;
 		} catch (error) {
 			const cached = cachePath ? await jsonFile(cachePath, null) : null;
-			return { ...(cached ?? { items: [], project: null, fetchedAt: null }), stale: true, error: error instanceof WorkError ? error.message : "Work list unavailable." };
+			return { ...(cached ?? { items: [], project: scopeProject, fetchedAt: null }), scopeResolved: Boolean(cachePath), stale: true, error: error instanceof WorkError ? error.message : "Work list unavailable." };
 		}
 	}
 	async resolve(cwd, id) {

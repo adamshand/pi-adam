@@ -10,7 +10,7 @@
   "scripts": {
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "lint": "oxlint",
-    "test": "node --test features/*.test.ts herdr/todos/*.test.js",
+    "test": "node --test features/*.test.ts herdr/todos/*.test.js herdr/app/*/*.test.js",
     "typecheck": "tsc"
   },
   "pi": {
