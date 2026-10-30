@@ -13,6 +13,7 @@ import { registerSessionSearchFeature } from "./features/session-search.ts";
 import { registerSaveImageFeature } from "./features/save-image.ts";
 import { registerTodosFeature } from "./features/todos.ts";
 import { registerTimersFeature } from "./features/timers.ts";
+import { registerToolCollapseFeature } from "./features/tool-collapse.ts";
 import { registerTurnStampFeature } from "./features/turn-stamp.ts";
 
 export default function piAdam(pi: ExtensionAPI): void {
@@ -31,4 +32,5 @@ export default function piAdam(pi: ExtensionAPI): void {
 	registerMruFeature(pi);
 	registerTurnStampFeature(pi);
 	registerTimersFeature(pi);
+	registerToolCollapseFeature(pi);
 }
