@@ -113,6 +113,22 @@ Use `/timers` to inspect pending timers, `/timers cancel <id>` to cancel one, or
 
 Pi must remain running for on-time delivery. Timers do not launch Pi or wake a sleeping computer, and print-mode invocations should not be used as background schedulers. No model requests are made while waiting by the timer feature. Pending timers are consumed before queuing a wake-up to avoid duplicate delivery; a process crash during dispatch can lose that wake-up.
 
+## Herdr Pi recovery
+
+Run `/reload` once in existing Herdr Pi sessions after installing this feature. New sessions publish recovery metadata automatically; no transcripts or credentials are copied.
+
+1. **`/herdr-save`** captures the local Herdr tabs currently running Pi: exact session file/ID, working directory, session directory, provider/model, thinking level, and name. It warns about sessions needing `/reload` and asks before saving a partial snapshot.
+2. Restart Herdr/core as needed. These commands do not stop or restart anything.
+3. Open Pi in a **new tab**, or resume one of the saved sessions, and run **`/herdr-restore`**. Choose a timestamped snapshot, review the plan, and confirm.
+
+Restore uses existing tabs/panes, matching space/tab IDs rather than terminal numbers alone. It skips already-running sessions, the current Pi terminal, child agents, remote machines, missing/ambiguous tabs, and anything other than a top-level idle fish shell. Unknown running Pi instances must be reloaded before duplicate checking can proceed. Pending shell input is cleared on approved targets; leave those tabs untouched while restoring. Foreground identity is checked again just before sending, but terminal typing is not an atomic compare-and-execute operation.
+
+Saved conversations reopen with their exact file, not `--continue`. An empty session whose file did not yet exist is recreated with its recorded ID and settings. A previously saved file that has disappeared is an error, never silently replaced with an empty conversation. Ephemeral (`--no-session`) sessions cannot be recovered. No prompts or old tasks are resent, though normal Pi startup extensions (including overdue timers) still run. The result says **launch command sent**, not that startup succeeded; check the tabs for authentication, trust, or startup errors.
+
+Snapshots live in `~/.local/state/pi-adam/herdr-recovery/` (`$XDG_STATE_HOME/pi-adam/herdr-recovery` when set), with private directories/files, host/core-session checks, and no automatic deletion. They reference the original session files rather than backing them up. V1 has manual snapshots only: no crash-time autosave, tab recreation, old snapshot import, custom Pi startup flags/environment capture, or separate recovery CLI. Model/thinking/name changes update live metadata; `/herdr-save` freezes it for recovery.
+
+Each launch gets a durable claim under `launch-claims/` **before** typing. A failed or uncertain send cannot be blindly retried into the same shell; a new shell after a later restart can be restored again. If startup fails, inspect the tab and resume manually, or remove only its corresponding claim after confirming no Pi was started. Concurrent restores are locked. An interrupted restore can leave `restore.lock/owner.json`: verify its PID has exited before removing that lock directory. Neither claims nor locks are automatically stolen or cleaned by age.
+
 ## Herdr agent metadata
 
 When Pi runs inside Herdr, `/name bugs` renames Pi's own tab. In the new Mac app, the integration resolves `HC_TERMINAL_ID` through `hc get` and sends an explicit `tab.rename` command to `herdr-app`, even when another tab is focused. Clearing the name restores automatic numbering; an unnamed startup/reload leaves manual tab names alone. Run `/reload` once in existing Pi sessions after updating the extension. The old Herdr CLI remains supported.
@@ -295,6 +311,7 @@ Use `/review-changes <goal and acceptance criteria>` to request the dual review 
 - `features/diagnostics.ts` — bounded, secret-redacting provider diagnostics
 - `features/herdr-git-metadata.ts` — per-pane Git branch, working-tree, and upstream status for Herdr Agent tokens
 - `features/herdr-session-name.ts` — Pi `/name` synchronization with Herdr tab titles
+- `features/herdr-recovery.ts` — exact session metadata, manual `/herdr-save`, and guarded `/herdr-restore`
 - `features/todos.ts` — canonical Todo/Idea tools, commands, guidance, and legacy migration
 - `features/herdr-todos.ts` — Herdr board lifecycle, visibility, metadata, and `/todos`
 - `features/mru.ts` — slash-command recency and editor integration

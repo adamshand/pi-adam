@@ -7,6 +7,7 @@ import { registerEnvFeature } from "./features/env.ts";
 import { registerFooterFeature } from "./features/footer.ts";
 import { registerHerdrAppTodosFeature } from "./features/herdr-app-todos.ts";
 import { registerHerdrGitMetadataFeature } from "./features/herdr-git-metadata.ts";
+import { registerHerdrRecoveryFeature } from "./features/herdr-recovery.ts";
 import { registerHerdrSessionNameFeature } from "./features/herdr-session-name.ts";
 import { registerHerdrTodosFeature } from "./features/herdr-todos.ts";
 import { registerMruFeature } from "./features/mru.ts";
@@ -28,6 +29,7 @@ export default function piAdam(pi: ExtensionAPI): void {
 	registerFooterFeature(pi);
 	registerHerdrGitMetadataFeature(pi);
 	registerHerdrSessionNameFeature(pi);
+	registerHerdrRecoveryFeature(pi);
 	registerTodosFeature(pi);
 	registerHerdrTodosFeature(pi);
 	registerHerdrAppTodosFeature(pi);
