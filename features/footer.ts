@@ -5,6 +5,7 @@ import { isCodexModel, registerCodexFastFeature } from "./codex-fast.ts";
 import { isCodexImageModel } from "./codex-image.ts";
 import { registerCodexUsageFeature } from "./codex-usage.ts";
 import { centeredFooter, readFooterGitStats, type FooterGitStats } from "./footer-git.ts";
+import { watchFooterGit } from "./footer-git-watch.ts";
 import { HerdrFooterBridge } from "./herdr-app-footer.ts";
 import { applyFooterAction, footerModelRotation, FooterControlServer, type FooterAction, type FooterControlEndpoint } from "./herdr-app-footer-controls.ts";
 
@@ -99,6 +100,7 @@ export function registerFooterFeature(
 	let controlEndpoint: FooterControlEndpoint | undefined;
 	let gitStats: FooterGitStats | undefined;
 	let gitRevision = 0;
+	let stopGitWatch: (() => void) | undefined;
 	const refreshGit = async (ctx: ExtensionContext) => {
 		if (ctx.mode !== "tui") return;
 		const revision = ++gitRevision;
@@ -380,6 +382,13 @@ export function registerFooterFeature(
 			};
 		});
 		footerInstalled = true;
+		try {
+			const stop = await watchFooterGit(pi, ctx.cwd, () => {
+				if (currentCtx === ctx) void refreshGit(ctx);
+			});
+			if (currentCtx !== ctx) stop();
+			else { stopGitWatch?.(); stopGitWatch = stop; }
+		} catch { /* Git discovery failure must not affect either footer. */ }
 		await publishMetrics();
 	});
 
@@ -391,6 +400,8 @@ export function registerFooterFeature(
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		currentCtx = undefined;
+		stopGitWatch?.();
+		stopGitWatch = undefined;
 		await controlServer?.stop();
 		controlServer = undefined;
 		controlEndpoint = undefined;

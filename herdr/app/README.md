@@ -149,6 +149,12 @@ no automatic fetch). Zero counts are omitted. They refresh at startup, branch
 changes, turn completion and agent settlement, even with the Pi footer hidden.
 Failed Git reads clear stale counts; missing upstream omits only commit counts.
 Below 600 logical pixels Git counts remain in the complete metrics tooltip.
+`features/footer-git-watch.ts` also watches the session's local Git directory and
+common directory, coalescing metadata changes for 400ms. Commits/staging/checkout
+and fetch therefore refresh footer counts without an agent turn. No idle polling
+is added; object/reflog/lock noise is ignored. Watchers close at shutdown/reload.
+Existing sessions need `/reload` to enable this; unsupported watchers retain the
+normal lifecycle refreshes.
 At narrower widths, secondary metrics move into the complete hover tooltip;
 model/context remain. The machine/branch/agent summary yields space as needed.
 

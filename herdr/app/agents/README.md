@@ -16,7 +16,9 @@ watcher feedback. Revisions preserve changes arriving during a Git query; if bus
 or inactive, the existing scheduling check picks them up later. Remote repositories
 keep the existing slow refresh; failed local watchers retry on a later refresh.
 Ordinary unstaged edits outside Git metadata still use the fallback/agent events.
-This does not change the separate Pi-driven native footer metrics.
+The separate Pi-driven footer now has its own local metadata watcher in
+`features/footer-git-watch.ts`, sharing this module's event filter. It requires
+Pi `/reload`; the sidebar watcher itself reloads live.
 
 Deploy after backing up the installed personal mod:
 

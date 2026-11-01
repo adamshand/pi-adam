@@ -114,7 +114,7 @@ test("footer caches branch cost and context between lifecycle updates", async ()
 	assert.equal(visibleWidth(first), 100);
 	assert.equal(visibleWidth(second), 100);
 	assert.match(first, /\+142.*−38.*↑2.*↓3/);
-	assert.equal(gitReads, 2, "rendering must not run Git");
+	assert.equal(gitReads, 3, "only startup status/upstream and metadata discovery may run Git; rendering must not");
 	for (let width = 1; width < 150; width += 1) {
 		assert.ok(visibleWidth(component.render(width)[0] ?? "") <= width);
 	}
