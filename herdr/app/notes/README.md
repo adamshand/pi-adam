@@ -1,5 +1,10 @@
 # Project notes
 
+The compact header shows the project name, save-state icon (including errors),
+reload icon (discards unsaved draft), and copy-notes-folder-URL icon. All icons
+have tooltips. No path or footer text takes space from the editor. The Files
+panel has no reveal-folder command, so the folder icon copies a file:// URL.
+
 Native local-only Notes panel. Files live at `~/.pi/projects/<name>-<identity-hash>/notes.md`.
 The canonical Git common directory supplies identity, so subfolders and worktrees share
 notes. Non-Git folders use their canonical absolute path. Separate clones are separate;
@@ -27,7 +32,7 @@ Install/update (back up personal layout/mods first):
 
 ```sh
 mkdir -p ~/.config/herdr-app/mods/adam-notes
-cp herdr/app/notes/{main.js,model.js,session.js,mod.json} ~/.config/herdr-app/mods/adam-notes/
+cp herdr/app/notes/{main.js,model.js,session.js,mod.json,*.svg} ~/.config/herdr-app/mods/adam-notes/
 cp herdr/app/tabs/main.js ~/.config/herdr-app/mods/adam-tabs/
 herdr-app check ~/.config/herdr-app/mods/adam-notes
 herdr-app check ~/.config/herdr-app/mods/adam-tabs

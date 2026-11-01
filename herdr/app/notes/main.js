@@ -1,5 +1,5 @@
-import { View, div } from "gpui-kit";
-import { v_flex, h_flex, Textarea, TextareaState } from "gpui-base";
+import { View, div, svg } from "gpui-kit";
+import { v_flex, h_flex, Button, Textarea, TextareaState } from "gpui-base";
 import { focused, terminals, spaces, props, theme, exec, readTextFile, writeTextFile, layout, window } from "herdr";
 import { resolveSession } from "./session.js";
 import { NoteDocument } from "./model.js";
@@ -15,7 +15,7 @@ export default class Notes extends View {
     this.config = props(); this.documents = new Map(); this.key = null; this.message = "";
     cx.timer.every(750, cx => {
       for (const entry of this.documents.values()) {
-        if (entry.doc.dirty && !entry.doc.busy && !entry.doc.error) cx.spawn(async cx => { await entry.doc.save(); cx.notify(); });
+        if (entry.doc.dirty && !entry.doc.busy && !entry.doc.error) cx.spawn(async cx => { const saving = entry.doc.save(); cx.notify(); await saving; cx.notify(); });
       }
       if (window()?.active !== false && !find(layout(), "panel")?.hidden && find(layout(), "panel-body")?.active === "notes") this.sync(cx);
     });
@@ -58,6 +58,23 @@ export default class Notes extends View {
       cx.notify();
     });
   }
+  reload(entry, cx) {
+    const { doc, state } = entry;
+    if (doc.busy) return;
+    doc.busy = true;
+    cx.notify();
+    const before = doc.text;
+    cx.spawn(async cx => {
+      // Keep the draft until a successful read; don't discard newer typing.
+      try {
+        const disk = await readTextFile(doc.path);
+        if (doc.text !== before) return;
+        doc.base = disk; doc.text = disk ?? ""; doc.error = ""; doc.loaded = true;
+        doc.persist(null); state.set_value(doc.text);
+      } catch { doc.error = "Could not reload. Draft retained."; }
+      finally { doc.busy = false; cx.notify(); }
+    });
+  }
   async close() { await Promise.all([...this.documents.values()].map(entry => entry.doc.save())); }
   render(cx) {
     this.sync(cx);
@@ -66,31 +83,38 @@ export default class Notes extends View {
     if (!entry) return root.child(div().whitespace_normal().child(this.message));
     const { doc, project, state } = entry;
     return root
-      .child(h_flex().gap(8).items_center().child(div().font_semibold().child("Notes")).child(div().text_color(t.muted).truncate().child(project.name)))
-      .child(div().text_size(10).text_color(t.dim).whitespace_normal().child(project.path))
+      .child(h_flex().gap(4).items_center().flex_none()
+        .child(div().flex_1().min_w(0).font_semibold().truncate().child(project.name))
+        .child(Button.new("notes-save-status").size(26).flex_none().items_center().justify_center()
+          .text_color(doc.error ? t.blocked : doc.busy || doc.dirty ? t.working : t.dim)
+          .tooltip(doc.error || (doc.busy ? "Saving…" : doc.dirty ? "Unsaved changes…" : "Saved locally"))
+          .child(svg(`mods/adam-notes/${doc.error ? "warning" : doc.busy ? "saving" : doc.dirty ? "dirty" : "saved"}.svg`).size(16)
+            .when(doc.busy, icon => icon.spin(1000))))
+        .child(Button.new("notes-reload").size(26).flex_none().items_center().justify_center().rounded(4).text_color(t.muted)
+          .tooltip(doc.busy ? "Wait for saving to finish" : "Reload from disk (discards unsaved draft)")
+          .when(!doc.busy, icon => icon.cursor_pointer().hover(style => style.bg(t.hover))
+            .on_click((_event, cx) => { cx.stop_propagation(); this.reload(entry, cx); }))
+          .child(svg("mods/adam-notes/reload.svg").size(16)))
+        .child(Button.new("notes-folder").size(26).flex_none().items_center().justify_center().rounded(4).text_color(t.muted)
+          .tooltip(this.copied === project.path ? "Notes-folder URL copied" : "Copy notes-folder URL")
+          .cursor_pointer().hover(style => style.bg(t.hover))
+          .on_click((_event, cx) => {
+            cx.stop_propagation();
+            const folder = project.path.slice(0, project.path.lastIndexOf("/") + 1);
+            cx.write_to_clipboard("file://" + folder.split("/").map(segment => encodeURIComponent(segment)).join("/"));
+            this.copied = project.path;
+            const revision = this.copyRevision = (this.copyRevision || 0) + 1;
+            cx.timer.after(1500, cx => {
+              if (this.copyRevision !== revision) return;
+              this.copied = null; cx.notify();
+            });
+            cx.notify();
+          })
+          .child(svg(`mods/adam-notes/${this.copied === project.path ? "saved" : "folder"}.svg`).size(16))))
       .child(v_flex().id("notes-editor").flex_1().min_h(0).w_full().rounded(6)
         .border_1().border_color(entry.focused ? t.accent : t.border).bg(t.surface).cursor_text()
         // Keep the enclosing layout from reclaiming keyboard focus for the terminal.
         .on_mouse_down("left", (_event, cx) => { state.focus(); cx.stop_propagation(); })
-        .child(Textarea.new(state).flex_1().min_h(0).w_full().p(8).text_color(t.foreground)))
-      .child(div().text_size(11).text_color(doc.error ? t.blocked : t.dim).whitespace_normal()
-        .child(doc.error || (doc.busy ? "Saving…" : doc.dirty ? "Unsaved changes…" : "Saved locally")))
-      .child(div().id("notes-reload").text_size(11).text_color(t.muted).cursor_pointer().child("Reload from disk (discard draft)")
-        .on_click((_event, cx) => {
-          if (doc.busy) return;
-          doc.busy = true;
-          const before = doc.text;
-          cx.spawn(async cx => {
-            // Keep the draft until a successful read; don't discard newer typing.
-            try {
-              const disk = await readTextFile(doc.path);
-              if (doc.text !== before) return;
-              doc.base = disk; doc.text = disk ?? ""; doc.error = ""; doc.loaded = true;
-              doc.persist(null); state.set_value(doc.text);
-            } catch { doc.error = "Could not reload. Draft retained."; }
-            finally { doc.busy = false; cx.notify(); }
-          });
-        }))
-      .child(div().text_size(10).text_color(t.dim).child("Your notes · agents edit only when asked"));
+        .child(Textarea.new(state).flex_1().min_h(0).w_full().p(8).text_color(t.foreground)));
   }
 }
