@@ -4,6 +4,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { isCodexModel, registerCodexFastFeature } from "./codex-fast.ts";
 import { isCodexImageModel } from "./codex-image.ts";
 import { registerCodexUsageFeature } from "./codex-usage.ts";
+import { isClaudeCodeModel, registerClaudeUsageFeature } from "./claude-usage.ts";
 import { centeredFooter, readFooterGitStats, type FooterGitStats } from "./footer-git.ts";
 import { watchFooterGit } from "./footer-git-watch.ts";
 import { HerdrFooterBridge } from "./herdr-app-footer.ts";
@@ -18,6 +19,11 @@ type FooterPalette = {
 	warning: Rgb;
 	error: Rgb;
 	thinking: Record<"low" | "medium" | "high" | "xhigh" | "max", Rgb>;
+};
+
+type UsageView = {
+	status: string;
+	snapshot?: { fiveHourUsed?: number; weeklyUsed?: number; availableResets?: number };
 };
 
 type FooterMetrics = {
@@ -123,7 +129,7 @@ export function registerFooterFeature(
 		const ctx = currentCtx;
 		if (!ctx || ctx.mode !== "tui" || !bridge) return Promise.resolve();
 		const fast = codexFast.getState();
-		const usage = codexUsage.getState();
+		const usage = activeUsage(ctx);
 		const actions: FooterAction[] = [];
 		if (controlEndpoint) {
 			if (footerModelRotation(ctx).length > 1) actions.push("model");
@@ -140,8 +146,7 @@ export function registerFooterFeature(
 			speed: lastSpeed,
 			git: gitStats,
 			controls: controlEndpoint ? { ...controlEndpoint, idle: ctx.isIdle() && !ctx.hasPendingMessages(), actions } : undefined,
-			usage: isCodexModel(ctx.model) && usage.eligible
-				? { status: usage.status, ...usage.snapshot } : undefined,
+			usage: usage && { status: usage.status, ...usage.snapshot },
 		});
 	};
 	const requestRender = () => {
@@ -150,6 +155,19 @@ export function registerFooterFeature(
 	};
 	const codexFast = registerCodexFastFeature(pi, requestRender);
 	const codexUsage = registerCodexUsageFeature(pi, requestRender);
+	const claudeUsage = registerClaudeUsageFeature(pi, requestRender);
+	/** Subscription usage for the active model's provider, if it reports any. */
+	const activeUsage = (ctx: ExtensionContext): UsageView | undefined => {
+		if (isCodexModel(ctx.model)) {
+			const usage = codexUsage.getState();
+			return usage.eligible ? { status: usage.status, snapshot: usage.snapshot } : undefined;
+		}
+		if (isClaudeCodeModel(ctx.model)) {
+			const usage = claudeUsage.getState();
+			return { status: usage.status, snapshot: usage.snapshot };
+		}
+		return undefined;
+	};
 
 	const refreshCost = (ctx: ExtensionContext) => {
 		metrics = { ...metrics, cost: branchCost(ctx), costUpdatedAt: Date.now() };
@@ -168,6 +186,7 @@ export function registerFooterFeature(
 			refreshMetrics(ctx);
 			const fast = codexFast.getState();
 			const usage = codexUsage.getState();
+			const claude = claudeUsage.getState();
 			const context = metrics.contextUsage;
 			const contextLimit = context?.contextWindow ?? ctx.model?.contextWindow ?? 0;
 			const contextTokens = context?.tokens ?? 0;
@@ -179,6 +198,7 @@ export function registerFooterFeature(
 				`Fast last injection: ${formatTimestamp(fast.lastInjectedAt)}${fast.lastInjectedModel ? ` · ${fast.lastInjectedModel}` : ""}`,
 				`Usage: ${usage.status} · last attempt ${formatTimestamp(usage.lastAttemptAt)} · last success ${formatTimestamp(usage.lastSuccessAt)}`,
 				`Usage error: ${usage.lastError ?? "none"}`,
+				`Claude usage: ${claude.status} · last update ${formatTimestamp(claude.lastSuccessAt)}`,
 				`Image tool: ${isCodexImageModel(ctx.model) ? "eligible" : "ineligible"}`,
 				`Footer cost: $${metrics.cost.toFixed(2)} · refreshed ${formatTimestamp(metrics.costUpdatedAt)}`,
 				`Context: ${contextTokens}/${contextLimit || "?"} (${contextPercent}) · refreshed ${formatTimestamp(metrics.contextUpdatedAt)}`,
@@ -307,21 +327,21 @@ export function registerFooterFeature(
 						? theme.fg("dim", "$0.00")
 						: theme.fg("dim", "$") + colorize(palette.primary, metrics.cost.toFixed(2));
 					const showCodex = isCodexModel(ctx.model);
-					const usage = codexUsage.getState();
+					const usage = activeUsage(ctx);
 					const colorizeCodexUsage = (used: number | undefined) => {
 						const text = used === undefined ? "?%" : `${Math.round(used)}%`;
 						if (used !== undefined && used > 90) return colorize(palette.error, text);
 						if (used !== undefined && used > 70) return colorize(palette.warning, text);
 						return colorize(palette.primary, text);
 					};
-					const usageHealth = usage.status === "error"
+					const usageHealth = usage?.status === "error"
 						? colorize(palette.error, "!")
-						: usage.status === "stale"
+						: usage?.status === "stale"
 							? colorize(palette.warning, "~")
-							: usage.status === "loading"
+							: usage?.status === "loading"
 								? theme.fg("dim", "…")
 								: "";
-					const codexStr = showCodex && usage.eligible && usage.snapshot
+					const codexStr = usage?.snapshot
 						? [
 							usage.snapshot.fiveHourUsed !== undefined
 								? `${theme.fg("dim", "5h ")}${colorizeCodexUsage(usage.snapshot.fiveHourUsed)}`
@@ -334,7 +354,7 @@ export function registerFooterFeature(
 								: "",
 							usageHealth,
 						].filter(Boolean).join(" ")
-						: showCodex && usageHealth ? `${theme.fg("dim", "usage ")}${usageHealth}` : "";
+						: usage && usageHealth ? `${theme.fg("dim", "usage ")}${usageHealth}` : "";
 
 					const modelStr = colorize(palette.primary, ctx.model?.id ?? "no-model");
 					const levelStr = styleThinkingLevel(theme, palette, thinkingLevel);
