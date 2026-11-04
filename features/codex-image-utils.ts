@@ -65,6 +65,22 @@ export function collectCompletedImageBase64(payload: JsonValue, images: string[]
 	return [...new Set(images)];
 }
 
+export function extractImageGenerationError(payload: JsonValue): string | undefined {
+	if (Array.isArray(payload)) {
+		for (const event of payload) {
+			const error = extractImageGenerationError(event);
+			if (error) return error;
+		}
+		return undefined;
+	}
+	if (!isJsonObject(payload)) return undefined;
+	const error = payload.error;
+	if (error !== undefined && isJsonObject(error) && isString(error.message)) return error.message;
+	if (payload.type === "error" && isString(payload.message)) return payload.message;
+	if (payload.response !== undefined) return extractImageGenerationError(payload.response);
+	return undefined;
+}
+
 export function extractResponseId(payload: JsonValue): string | undefined {
 	if (Array.isArray(payload)) {
 		for (const item of payload) {

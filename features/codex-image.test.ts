@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { buildHeaders, formatImageGenerationError, isCodexImageModel, readImageResponseAndSave } from "./codex-image.ts";
+import { buildHeaders, buildRequestBody, formatImageGenerationError, isCodexImageModel, readImageResponseAndSave } from "./codex-image.ts";
 import { createTestExtensionContext } from "./test-extension.ts";
 import {
 	collectCompletedImageBase64,
@@ -30,6 +30,15 @@ test("image generation accepts any Codex Responses model, but no other provider 
 	assert.equal(isCodexImageModel(undefined), false);
 	assert.equal(isCodexImageModel({ ...headerTestModel, provider: "openai" }), false);
 	assert.equal(isCodexImageModel({ ...headerTestModel, api: "openai-responses" }), false);
+});
+
+test("image requests omit reasoning settings incompatible with the image model", () => {
+	const body = buildRequestBody(headerTestModel, {
+		prompt: "draw", size: "1024x1024", "target-path": tmpdir(),
+	});
+	assert.equal("reasoning" in body, false);
+	assert.equal(body.model, headerTestModel.id);
+	assert.deepEqual(body.tools, [{ type: "image_generation", model: "gpt-image-2", size: "1024x1024" }]);
 });
 
 test("image headers omit null values and preserve provider authorization", async () => {
@@ -114,6 +123,27 @@ test("rejects a stream containing only partial image previews", async () => {
 		);
 	} finally {
 		rmSync(targetPath, { recursive: true, force: true });
+	}
+});
+
+test("surfaces sanitized API errors from JSON and streamed responses", async () => {
+	const error = { code: "invalid_value", message: "Complexity 'high' is not supported. Bearer secret-token" };
+	const payloads = [
+		{ type: "error", error },
+		{ type: "response.failed", response: { status: "failed", error } },
+		{ type: "error", message: error.message },
+		{ error },
+	];
+	for (const payload of payloads) {
+		for (const streamed of [true, false]) {
+			const body = streamed ? `data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n` : JSON.stringify(payload);
+			await assert.rejects(
+				readImageResponseAndSave(new Response(body), { cwd: tmpdir() }, {
+					prompt: "draw", size: "1024x1024", "target-path": tmpdir(),
+				}),
+				{ message: "Image generation failed: Complexity 'high' is not supported. Bearer [REDACTED]" },
+			);
+		}
 	}
 });
 

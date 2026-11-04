@@ -11,6 +11,7 @@ import {
 	collectCompletedImageBase64,
 	detectImageMimeType,
 	extractResponseId,
+	extractImageGenerationError,
 	type JsonValue,
 	JsonValueSchema,
 	parseSseDataBlocks,
@@ -118,13 +119,12 @@ export async function buildHeaders(ctx: ExtensionContext, model: Model<Api>): Pr
 	return headers;
 }
 
-function buildRequestBody(model: Model<Api>, params: GenerateImageParamsType) {
+export function buildRequestBody(model: Model<Api>, params: GenerateImageParamsType) {
 	return {
 		model: model.id,
 		store: false,
 		stream: true,
 		instructions: "You are a helpful assistant.",
-		reasoning: { effort: "high", summary: "auto" },
 		input: [{
 			role: "user",
 			content: [{ type: "input_text", text: params.prompt }],
@@ -158,6 +158,8 @@ export async function readImageResponseAndSave(
 	onSaved?: (saved: SavedImage) => void,
 ): Promise<{ payload: JsonValue; saved: SavedImage }> {
 	const saveFirst = async (payload: JsonValue, label: string) => {
+		const error = extractImageGenerationError(payload);
+		if (error) throw new Error(`Image generation failed: ${sanitizeDiagnosticError(error)}`);
 		const imageBase64 = collectCompletedImageBase64(payload)[0];
 		if (!imageBase64) throw new Error(`${label} did not contain a completed image generation result.`);
 		const saved = await saveImageToTarget(ctx, imageBase64, params);
@@ -215,6 +217,8 @@ export async function readImageResponseAndSave(
 		}
 		return { payload, saved: await saveFirst(payload, "Image generation response") };
 	}
+	const error = extractImageGenerationError(events);
+	if (error) throw new Error(`Image generation failed: ${sanitizeDiagnosticError(error)}`);
 	if (!saved) saved = await saveFirst(events, "Image generation stream");
 	return { payload: events, saved };
 }
