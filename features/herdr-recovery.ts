@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
@@ -119,12 +119,55 @@ export async function captureSnapshot(terminals: Terminal[], coreSession: string
 	return { version: 1, host: hostname(), coreSession, createdAt: new Date().toISOString(), entries, warnings };
 }
 
+function automaticDirectory(root: string, coreSession: string): string {
+	return join(root, "automatic", encodeURIComponent(JSON.stringify([hostname(), coreSession])));
+}
+
+/** Independent files avoid cross-session read/modify/write races and retain replaced sessions. */
+export async function saveAutomaticEntry(root: string, coreSession: string, entry: RecoveryEntry, activated = false): Promise<void> {
+	const key = createHash("sha256").update(JSON.stringify([entry.terminal, entry.reference.sessionId, entry.reference.sessionFile])).digest("hex");
+	const file = join(automaticDirectory(root, coreSession), `${key}.json`);
+	let previous: RecoverySnapshot | undefined;
+	try { previous = Parse(SnapshotSchema, JSON.parse(await readFile(file, "utf8"))); }
+	catch (error) {
+		if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+	}
+	// Once persisted, a missing conversation is loss, not a new empty session.
+	const saved = { ...entry, savedFile: entry.savedFile || previous?.entries[0]?.savedFile === true };
+	if (!activated && previous && JSON.stringify(previous.entries) === JSON.stringify([saved])) return;
+	await atomicJson(file, { version: 1, host: hostname(), coreSession, createdAt: new Date().toISOString(), entries: [saved], warnings: [] });
+}
+
+export async function readAutomaticSnapshot(root: string, coreSession: string): Promise<RecoverySnapshot> {
+	const directory = automaticDirectory(root, coreSession);
+	const snapshot: RecoverySnapshot = { version: 1, host: hostname(), coreSession, createdAt: new Date().toISOString(), entries: [], warnings: [] };
+	let files: string[];
+	try { files = await readdir(directory); }
+	catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") return snapshot;
+		throw error;
+	}
+	const latest = new Map<string, { time: number; entry: RecoveryEntry }>();
+	for (const file of files.filter(f => /^[a-f0-9]{64}\.json$/.test(f)).sort()) {
+		try {
+			const record = Parse(SnapshotSchema, JSON.parse(await readFile(join(directory, file), "utf8")));
+			if (record.host !== hostname() || record.coreSession !== coreSession || record.entries.length !== 1 || !Number.isFinite(Date.parse(record.createdAt))) throw new Error("Invalid automatic record");
+			const entry = record.entries[0], time = Date.parse(record.createdAt);
+			if (!latest.has(entry.terminal) || latest.get(entry.terminal)!.time <= time) latest.set(entry.terminal, { time, entry });
+		} catch {
+			snapshot.warnings.push(`Unreadable automatic record: ${join(directory, file)} (left untouched)`);
+		}
+	}
+	snapshot.entries = [...latest.values()].map(item => item.entry).sort((a, b) => a.where.localeCompare(b.where));
+	return snapshot;
+}
+
 type LaunchClaim = { target: string; time: string; state: string };
 async function atomicJson(path: string, value: RecoverySnapshot | LaunchClaim): Promise<void> {
 	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
 	const temp = `${path}.${randomUUID()}.tmp`;
 	try {
-		await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+		await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: "wx", flush: true });
 		await rename(temp, path);
 	} finally { await rm(temp, { force: true }); }
 }
@@ -187,8 +230,9 @@ export function registerHerdrRecoveryFeature(pi: ExtensionAPI, environment: Node
 	};
 	let pending = Promise.resolve();
 	let published: string | undefined;
-	const publish = (ctx: ExtensionContext): Promise<void> => {
-		if (!terminal || ctx.mode !== "tui") return Promise.resolve();
+	let warned = false;
+	const publish = (ctx: ExtensionContext, activated = false): Promise<void> => {
+		if (!terminal || terminal.includes("/") || ctx.mode !== "tui") return Promise.resolve();
 		const reference: Reference = {
 			version: 1, pid: process.pid, sessionId: ctx.sessionManager.getSessionId(),
 			sessionFile: ctx.sessionManager.getSessionFile(), sessionDir: ctx.sessionManager.getSessionDir(),
@@ -197,19 +241,33 @@ export function registerHerdrRecoveryFeature(pi: ExtensionAPI, environment: Node
 		};
 		const value = JSON.stringify(reference);
 		pending = pending.then(async () => {
-			if (value === published) return;
 			const t = Parse(TerminalSchema, JSON.parse(await run(["get", terminal])));
-			if (!t.labels["herdr.tab"]) return;
-			await run(["label", terminal, `${RECOVERY_LABEL}=${value}`]);
-			published = value;
-		}).catch(() => { /* Optional bridge; commands report missing metadata explicitly. */ });
+			if (t.parent || !t.labels["herdr.tab"] || !t.labels["herdr.space"]) return;
+			// Disk first: failure to update an optional live label must not lose recovery.
+			const snapshot = await captureSnapshot([{ ...t, labels: { ...t.labels, [RECOVERY_LABEL]: value } }], coreSession);
+			if (snapshot.entries[0]) await saveAutomaticEntry(root, coreSession, snapshot.entries[0], activated);
+			else if (reference.sessionFile) throw new Error("Pi foreground identity not available yet");
+			if (value !== published) {
+				await run(["label", terminal, `${RECOVERY_LABEL}=${value}`]);
+				published = value;
+			}
+			warned = false;
+		}).catch(() => {
+			if (!warned) ctx.ui.notify("Herdr recovery could not refresh this session. It will retry on the next session/settings event or /herdr-save; previous records are retained.", "warning");
+			warned = true;
+		});
 		return pending;
 	};
-	pi.on("session_start", (_event, ctx) => publish(ctx));
+	pi.on("session_start", (_event, ctx) => publish(ctx, true));
 	pi.on("model_select", (_event, ctx) => publish(ctx));
 	pi.on("thinking_level_select", (_event, ctx) => publish(ctx));
 	pi.on("session_info_changed", (_event, ctx) => publish(ctx));
 	pi.on("agent_settled", (_event, ctx) => publish(ctx));
+	pi.on("session_tree", (_event, ctx) => publish(ctx));
+	// The first persisted message may arrive long before settlement. No token hooks.
+	pi.on("message_end", (event, ctx) => {
+		if (event.message.role === "user") return publish(ctx);
+	});
 	pi.on("session_shutdown", async () => {
 		await pending;
 		if (!terminal || !published) return;
@@ -247,13 +305,16 @@ export function registerHerdrRecoveryFeature(pi: ExtensionAPI, environment: Node
 				await publish(ctx);
 				await mkdir(root, { recursive: true, mode: 0o700 });
 				const files = (await readdir(root)).filter(f => /^\d+-[\da-f-]+\.json$/.test(f)).sort().reverse();
-				if (!files.length) throw new Error("No snapshots yet; run /herdr-save before restarting.");
-				const choices = files.map(file => `${new Date(Number(file.split("-")[0])).toLocaleString()} — ${file}`);
-				const choice = await ctx.ui.select("Herdr snapshot (newest first)", choices);
+				const automatic = await readAutomaticSnapshot(root, coreSession);
+				if (automatic.warnings.length) ctx.ui.notify(automatic.warnings.join("\n"), "warning");
+				if (!files.length && !automatic.entries.length) throw new Error("No recovery records yet. Reload your Herdr Pi sessions to enable automatic saving.");
+				const autoChoice = `Automatic — latest session per terminal (${automatic.entries.length})`;
+				const manualChoices = files.map(file => `${new Date(Number(file.split("-")[0])).toLocaleString()} — ${file}`);
+				const choices = [...(automatic.entries.length ? [autoChoice] : []), ...manualChoices];
+				const choice = await ctx.ui.select("Herdr recovery source", choices);
 				if (!choice) return;
-				const selected = files[choices.indexOf(choice)];
-				if (!selected) return;
-				const snapshot = Parse(SnapshotSchema, JSON.parse(await readFile(join(root, selected), "utf8")));
+				const selected = files[manualChoices.indexOf(choice)];
+				const snapshot = choice === autoChoice ? automatic : Parse(SnapshotSchema, JSON.parse(await readFile(join(root, selected), "utf8")));
 				if (snapshot.host !== hostname() || snapshot.coreSession !== coreSession) throw new Error("Snapshot belongs to another host or HC_SESSION");
 				const plan = planRestore(snapshot.entries, await inspectTerminals(run), terminal, ctx.sessionManager.getSessionId());
 				const preview = plan.map(p => `${p.entry.where}: ${p.reason}${!p.entry.savedFile ? " (empty session)" : ""}`).join("\n");

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import {
-	captureSnapshot, inspectTerminals, liveReference, planRestore, recoveryCommand,
+	captureSnapshot, inspectTerminals, liveReference, planRestore, recoveryCommand, readAutomaticSnapshot,
 	RECOVERY_LABEL, registerHerdrRecoveryFeature, restoreEntry,
 	type RecoveryEntry, type Reference, type Terminal,
 } from "./herdr-recovery.ts";
@@ -172,16 +172,18 @@ test("failed sends leave durable claims, not automatic retries", async t => {
 	assert.equal(claim.state, "attempting");
 });
 
-test("extension registers manual commands and publishes owned metadata only in Herdr TUI", async () => {
+test("extension registers manual commands and publishes owned metadata only in Herdr TUI", async t => {
+	const root = await mkdtemp(join(tmpdir(), "herdr-events-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
 	const handlers = new Map<string, (event: { reason?: string }, ctx: ExtensionContext) => Promise<void>>();
 	const commands: string[] = [], calls: string[][] = [];
 	const pi = createTestExtensionApi({
 		on: (name: string, handler: (event: { reason?: string }, ctx: ExtensionContext) => Promise<void>) => handlers.set(name, handler),
 		registerCommand: (name: string) => commands.push(name),
 		getThinkingLevel: () => "medium", getSessionName: () => "Project",
-		exec: async (_command: string, args: string[]) => { calls.push(args); return { code: 0, stdout: JSON.stringify(shell()) }; },
+		exec: async (_command: string, args: string[]) => { calls.push(args); return { code: 0, stdout: JSON.stringify(agent("t1", { ...reference, pid: process.pid })) }; },
 	});
-	registerHerdrRecoveryFeature(pi, { HC_TERMINAL_ID: "t1" });
+	registerHerdrRecoveryFeature(pi, { HC_TERMINAL_ID: "t1", XDG_STATE_HOME: root });
 	assert.deepEqual(commands, ["herdr-save", "herdr-restore"]);
 	assert.equal(calls.length, 0);
 	const ctx = createTestExtensionContext({ mode: "tui", cwd: "/project", model: { id: "model", provider: "provider" }, sessionManager: {
@@ -191,7 +193,11 @@ test("extension registers manual commands and publishes owned metadata only in H
 	assert.match(calls[1][2], /pi-adam.recovery=/);
 	assert.match(calls[1][2], /"provider":"provider"/);
 	await handlers.get("session_start")!({}, ctx);
-	assert.equal(calls.length, 2, "unchanged publications are deduplicated");
+	assert.equal(calls.filter(c => c[0] === "label").length, 1, "unchanged publications are deduplicated");
+	const snapshot = await readAutomaticSnapshot(join(root, "pi-adam", "herdr-recovery"), "default");
+	assert.equal(snapshot.entries.length, 1);
+	await handlers.get("session_shutdown")!({}, ctx);
+	assert.equal((await readAutomaticSnapshot(join(root, "pi-adam", "herdr-recovery"), "default")).entries.length, 1, "shutdown retains the disk record");
 });
 
 test("slash commands save privately, preview before mutation, and leave current Pi alone", async t => {
@@ -222,12 +228,12 @@ test("slash commands save privately, preview before mutation, and leave current 
 		ui: {
 			notify: (message: string) => notices.push(message),
 			confirm: async (_title: string, message: string) => { confirmations.push(message); return allow; },
-			select: async (_title: string, options: string[]) => options[0],
+			select: async (_title: string, options: string[]) => options.find(option => !option.startsWith("Automatic")),
 		},
 	});
 	await commands.get("herdr-save")!("", ctx);
 	assert.match(notices.at(-1)!, /Saved 2 Pi sessions/);
-	const files = await readdir(root);
+	const files = (await readdir(root)).filter(file => file.endsWith(".json"));
 	assert.equal(files.length, 1);
 	const saved = JSON.parse(await readFile(join(root, files[0]), "utf8"));
 	assert.equal(saved.entries.length, 2);

@@ -109,23 +109,29 @@ timer({ action: "cancel", id: "<timer-id>" })
 
 Durations accept `s`, `m`, `h`, or `d`, including decimals. Absolute times require a full date, seconds, and `Z` or an explicit UTC offset; invalid or past deadlines are rejected. The agent should finish its turn after scheduling rather than poll. A wake-up triggers a new turn when idle or queues a follow-up when busy, carrying the saved instructions and scheduled/actual times. Timers due together are delivered together.
 
+Timer results, wake-ups, and `/timers` display friendly dates and times in the machine's local timezone, including the date and timezone abbreviation. Pending timers also show relative time (for example, “in 3 minutes”). Structured tool data keeps UTC ISO timestamps unchanged.
+
 Use `/timers` to inspect pending timers, `/timers cancel <id>` to cancel one, or `/timers cancel all` to cancel every pending timer. Timers belong to the session across conversation branches; cancellation or firing is not undone by tree navigation. Reload restores deadlines. Closing or switching sessions clears live callbacks; resuming the original session delivers overdue timers once.
 
 Pi must remain running for on-time delivery. Timers do not launch Pi or wake a sleeping computer, and print-mode invocations should not be used as background schedulers. No model requests are made while waiting by the timer feature. Pending timers are consumed before queuing a wake-up to avoid duplicate delivery; a process crash during dispatch can lose that wake-up.
 
 ## Herdr Pi recovery
 
-Run `/reload` once in existing Herdr Pi sessions after installing this feature. New sessions publish recovery metadata automatically; no transcripts or credentials are copied.
+Run `/reload` once in existing Herdr Pi sessions after installing this update. New sessions save recovery records automatically; no transcripts or credentials are copied.
 
-1. **`/herdr-save`** captures the local Herdr tabs currently running Pi: exact session file/ID, working directory, session directory, provider/model, thinking level, and name. It warns about sessions needing `/reload` and asks before saving a partial snapshot.
-2. Restart Herdr/core as needed. These commands do not stop or restart anything.
-3. Open Pi in a **new tab**, or resume one of the saved sessions, and run **`/herdr-restore`**. Choose a timestamped snapshot, review the plan, and confirm.
+1. **Automatic saving** records each local top-level Herdr Pi session on startup/reload/session switch, model/thinking/name changes, tree navigation, user-message completion, and settlement. Writes are atomic and skipped when the record is unchanged. No timer, daemon, per-token writes, or quit-time save is required. Records contain the exact session file/ID, working and session directories, provider/model, thinking level, and last observed Herdr tab identity.
+2. Reboot or restart Herdr/core as needed. Records survive normal exits and interrupted processes. These commands do not stop or restart anything.
+3. Open Pi in a **new tab**, or resume one of the saved sessions, and run **`/herdr-restore`**. Choose **Automatic — latest session per terminal**, review the plan, and confirm. Timestamped manual snapshots remain available too.
+
+**`/herdr-save`** is still an optional explicit checkpoint of all currently running local Herdr Pi tabs. It warns about sessions needing `/reload` and asks before saving a partial snapshot. Automatic saving covers only sessions that have loaded this version; it cannot retroactively capture sessions already lost.
 
 Restore uses existing tabs/panes, matching space/tab IDs rather than terminal numbers alone. It skips already-running sessions, the current Pi terminal, child agents, remote machines, missing/ambiguous tabs, and anything other than a top-level idle fish shell. Unknown running Pi instances must be reloaded before duplicate checking can proceed. Pending shell input is cleared on approved targets; leave those tabs untouched while restoring. Foreground identity is checked again just before sending, but terminal typing is not an atomic compare-and-execute operation.
 
 Saved conversations reopen with their exact file, not `--continue`. An empty session whose file did not yet exist is recreated with its recorded ID and settings. A previously saved file that has disappeared is an error, never silently replaced with an empty conversation. Ephemeral (`--no-session`) sessions cannot be recovered. No prompts or old tasks are resent, though normal Pi startup extensions (including overdue timers) still run. The result says **launch command sent**, not that startup succeeded; check the tabs for authentication, trust, or startup errors.
 
-Snapshots live in `~/.local/state/pi-adam/herdr-recovery/` (`$XDG_STATE_HOME/pi-adam/herdr-recovery` when set), with private directories/files, host/core-session checks, and no automatic deletion. They reference the original session files rather than backing them up. V1 has manual snapshots only: no crash-time autosave, tab recreation, old snapshot import, custom Pi startup flags/environment capture, or separate recovery CLI. Model/thinking/name changes update live metadata; `/herdr-save` freezes it for recovery.
+Records and snapshots live in `~/.local/state/pi-adam/herdr-recovery/` (`$XDG_STATE_HOME/pi-adam/herdr-recovery` when set), with private directories/files, host/core-session checks, and no automatic deletion. Automatic records under `automatic/` are separate per terminal/session, so simultaneous sessions do not rewrite a shared snapshot. Starting another session in a tab retains the older record on disk; the default automatic source offers only the latest per terminal. Use a new bootstrap tab so it does not supersede a session you want to restore in that tab. Intentionally closed sessions also remain recorded: missing tabs are reported and skipped, never recreated automatically. Corrupt records are reported and left untouched. A save failure warns once, retains the previous record, and retries on the next event or `/herdr-save`.
+
+These are recovery references, not backups of conversation files. Tab moves/renames are observed at the next Pi event, not watched continuously. There is no tab recreation, old ad-hoc snapshot import, custom Pi startup flags/environment capture, or separate recovery CLI. Shutdown only clears owned live metadata, never the disk records.
 
 Each launch gets a durable claim under `launch-claims/` **before** typing. A failed or uncertain send cannot be blindly retried into the same shell; a new shell after a later restart can be restored again. If startup fails, inspect the tab and resume manually, or remove only its corresponding claim after confirming no Pi was started. Concurrent restores are locked. An interrupted restore can leave `restore.lock/owner.json`: verify its PID has exited before removing that lock directory. Neither claims nor locks are automatically stolen or cleaned by age.
 
