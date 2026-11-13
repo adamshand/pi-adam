@@ -64,6 +64,28 @@ test("compact approval bar puts buttons at the bottom and can hide keyboard hint
 	assert.equal(widget.handleMouse(click(2, 2)), undefined, "padding isn't a button");
 });
 
+test("Enter and Esc act only in focused review; repeats, releases and pasted text never approve", () => {
+	const actions: CommandAction[] = [];
+	let left = 0;
+	const widget = new StagedCommandWidget({ title: "Review", location: "/tmp", command: "true" }, testTheme(), action => actions.push(action), () => true, () => { left++; });
+	widget.handleInput("\r");
+	widget.handleInput("\x1b");
+	assert.equal(actions.length, 0);
+	widget.focused = true;
+	assert.match(widget.render(80).join("\n"), /Enter runs · Esc dismisses/);
+	for (const data of ["\x1b[13;1:2u", "\x1b[13;1:3u", "\x1b[200~\r\x1b[201~", "hello\r", "\x1br"]) widget.handleInput(data);
+	assert.equal(actions.length, 0);
+	widget.handleInput("\t");
+	assert.equal(left, 1);
+	widget.handleInput("\r");
+	widget.handleInput("\r");
+	assert.deepEqual(actions, ["run"]);
+	const dismiss = new StagedCommandWidget({ title: "Review", location: "/tmp", command: "true" }, testTheme(), action => actions.push(action));
+	dismiss.focused = true;
+	dismiss.handleInput("\x1b");
+	assert.deepEqual(actions, ["run", "dismiss"]);
+});
+
 test("buttons stay reachable when the dock clips a long script", () => {
 	const actions: CommandAction[] = [];
 	const widget = new StagedCommandWidget({ title: "Long", location: "/tmp", command: "echo hi\n".repeat(500) }, testTheme(), action => actions.push(action));

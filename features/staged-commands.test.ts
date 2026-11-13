@@ -11,6 +11,7 @@ function harness() {
 	const events = new Map<string, () => void>();
 	const widgets: (((tui: TUI, theme: Theme) => Component) | undefined)[] = [];
 	const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+	const shortcuts = new Map<string, (ctx: ExtensionContext) => Promise<void>>();
 	let stage: ((id: string, args: CommandDraft, signal: undefined, update: undefined, ctx: ExtensionContext) => Promise<{ content: { text: string }[]; structuredContent: { id: string; status: "pending" } }>) | undefined;
 	const stagedTexts: string[] = [];
 	let lastScript = "";
@@ -18,13 +19,26 @@ function harness() {
 	let idle = true;
 	let mode = "tui";
 	let executions = 0;
+	let review: Component | undefined;
+	let reviewCount = 0;
+	let reviewOpen = false;
+	let editorText = "";
 	const messages: { content: string; display: boolean }[] = [];
 	const notices: string[] = [];
 	const ctx = createTestExtensionContext({
 		cwd: "/tmp", get mode() { return mode; }, isIdle: () => idle,
 		ui: {
+			getEditorText: () => editorText,
 			setWidget: (_key: string, factory: ((tui: TUI, theme: Theme) => Component) | undefined) => widgets.push(factory),
-			custom: async () => {
+			custom: async (factory: (tui: TUI, theme: Theme, keys: never, done: (value: string | undefined) => void) => Component, options?: { overlay?: boolean }) => {
+				if (options?.overlay) return new Promise<string | undefined>(resolve => {
+					reviewCount++;
+					reviewOpen = true;
+					const done = (value: string | undefined) => { reviewOpen = false; resolve(value); };
+					// SAFETY: the approval factory uses only theme.fg; tui and keys are unused.
+					// @ts-expect-error Minimal UI doubles for approval keyboard tests.
+					review = factory({}, { fg: (_color: string, text: string) => text }, undefined, done);
+				});
 				executions++;
 				return `[command completed · exit 0]\n$ /bin/sh -c '${lastScript}'\n\nexample output`;
 			},
@@ -35,27 +49,26 @@ function harness() {
 		on: (name: string, handler: (event: undefined, ctx: ExtensionContext) => void) => events.set(name, () => handler(undefined, ctx)),
 		registerTool: (tool: { execute: NonNullable<typeof stage> }) => { stage = tool.execute; },
 		registerCommand: (name: string, entry: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => commands.set(name, entry.handler),
+		registerShortcut: (key: string, entry: { handler: (ctx: ExtensionContext) => Promise<void> }) => shortcuts.set(key, entry.handler),
 		registerMessageRenderer: () => {},
 		sendMessage: (message: { content: string; display: boolean }, options: { triggerTurn: boolean }) => { messages.push(message); continuations.push(options.triggerTurn); },
 	}));
 	assert.ok(stage);
 	return {
-		card: () => {
-			const factory = widgets.at(-1);
-			assert.ok(factory);
-			// SAFETY: the factory uses only terminal.rows and theme.fg.
-			// @ts-expect-error Minimal TUI/theme doubles for the widget factory.
-			return factory({ terminal: { rows: 40 }, mode: "fullscreen" }, { fg: (_color: string, text: string) => text });
-		},
+		reviewCount: () => reviewCount,
+		reviewOpen: () => reviewOpen,
+		draft: (text: string) => { editorText = text; },
 		stage: async (script = "false") => {
 			const result = await stage!("id", { title: "Test", script }, undefined, undefined, ctx);
 			lastScript = script;
 			stagedTexts.push(result.content[0].text);
 			return result;
 		},
+		focus: () => shortcuts.get("alt+r")!(ctx),
+		review: () => review,
 		run: (args = "") => commands.get("run")!(args, ctx),
 		dismiss: () => commands.get("dismiss")!("", ctx),
-		events, messages, notices, commands, widgets, stagedTexts, continuations,
+		events, messages, notices, commands, widgets, stagedTexts, continuations, shortcuts,
 		busy: () => { idle = false; }, rpc: () => { mode = "rpc"; },
 		executions: () => executions,
 	};
@@ -66,10 +79,10 @@ test("staging publishes literal source without execution; replacement runs only 
 	await h.stage("echo first");
 	await h.stage("echo second");
 	assert.equal(h.executions(), 0);
-	assert.equal(h.widgets.length, 2);
-	assert.equal(h.widgets.at(-1), undefined);
+	assert.equal(h.widgets.length, 0, "no duplicate pinned bar");
+	assert.equal(h.reviewCount(), 0);
 	h.events.get("agent_settled")!();
-	assert.ok(h.widgets.at(-1));
+	assert.equal(h.reviewCount(), 1);
 	assert.match(h.stagedTexts[0], /Script:\necho first/);
 	assert.match(h.stagedTexts[0], /Local · Run as: current user · Interpreter: sh/);
 	assert.match(h.stagedTexts[0], /Directory: \/tmp/);
@@ -88,19 +101,47 @@ test("staging publishes literal source without execution; replacement runs only 
 	assert.ok(!h.commands.has("staged"), "full script is inline; no viewer command");
 });
 
-test("approval card appears only after settlement and hides while another turn runs", async () => {
+test("one popup opens on settlement; Tab and later turns do not reopen it", async () => {
 	const h = harness();
 	await h.stage();
-	assert.equal(h.widgets.at(-1), undefined);
+	assert.equal(h.reviewOpen(), false);
 	h.events.get("agent_settled")!();
-	assert.ok(h.widgets.at(-1));
+	assert.equal(h.reviewOpen(), true);
+	assert.equal(h.widgets.length, 0);
+	h.review()!.handleInput?.("\t");
+	await settle();
+	assert.equal(h.reviewOpen(), false);
+	h.events.get("agent_settled")!();
+	assert.equal(h.reviewCount(), 1);
+	const reopened = h.focus();
+	assert.equal(h.reviewOpen(), true);
 	h.events.get("agent_start")!();
-	assert.equal(h.widgets.at(-1), undefined);
+	await reopened;
+	assert.equal(h.reviewOpen(), false);
 	h.events.get("agent_settled")!();
-	assert.ok(h.widgets.at(-1));
+	assert.equal(h.reviewCount(), 2);
 	await h.dismiss();
+});
+
+test("a draft keeps focus in chat; automatic popup guards immediate Enter", async t => {
+	let now = 1000;
+	t.mock.method(performance, "now", () => now);
+	const h = harness();
+	await h.stage();
+	h.draft("still typing");
 	h.events.get("agent_settled")!();
-	assert.equal(h.widgets.at(-1), undefined);
+	assert.equal(h.reviewCount(), 0);
+	assert.match(h.notices.at(-1)!, /Alt\+R/);
+	h.draft("");
+	await h.stage();
+	h.events.get("agent_settled")!();
+	h.review()!.handleInput?.("\r");
+	await settle();
+	assert.equal(h.executions(), 0);
+	now += 501;
+	h.review()!.handleInput?.("\r");
+	await settle();
+	assert.equal(h.executions(), 1);
 });
 
 test("dismiss and session boundaries clear the pending command", async () => {
@@ -131,14 +172,17 @@ test("invalid replacement preserves the previously staged command", async () => 
 	assert.match(h.messages.at(-1)!.content, /echo original/);
 });
 
-test("clicks on replaced cards cannot run the replacement; current Run is one-shot", async () => {
+test("clicks on replaced popups cannot run the replacement; current Run is one-shot", async t => {
+	let now = 1000;
+	t.mock.method(performance, "now", () => now);
 	const h = harness();
 	await h.stage("echo old");
 	h.events.get("agent_settled")!();
-	const old = h.card();
+	const old = h.review()!;
 	await h.stage("echo new");
 	h.events.get("agent_settled")!();
-	const current = h.card();
+	const current = h.review()!;
+	now += 501;
 	function runClick(card: Component) {
 		const lines = card.render(80);
 		const y = lines.findIndex(line => line.includes("[ ▶ Run ]"));
@@ -148,12 +192,33 @@ test("clicks on replaced cards cannot run the replacement; current Run is one-sh
 	runClick(old);
 	await settle();
 	assert.equal(h.executions(), 0);
-	assert.match(h.notices.at(-1)!, /no longer pending/);
 	runClick(current);
 	runClick(current);
 	await settle();
 	assert.equal(h.executions(), 1);
 	assert.equal(h.widgets.at(-1), undefined);
+});
+
+test("manual keyboard approval closes on boundaries and executes only once", async () => {
+	const h = harness();
+	await h.stage();
+	assert.equal(h.executions(), 0);
+	const approval = h.focus();
+	h.review()!.handleInput?.("\r");
+	h.review()!.handleInput?.("\r");
+	await approval;
+	assert.equal(h.executions(), 1);
+	assert.deepEqual(h.continuations, [true]);
+	for (const boundary of ["session_shutdown", "agent_start", "replace", "escape", "tab"]) {
+		await h.stage();
+		const focused = h.focus();
+		if (boundary === "replace") await h.stage("echo replacement");
+		else if (boundary === "escape") h.review()!.handleInput?.("\x1b");
+		else if (boundary === "tab") h.review()!.handleInput?.("\t");
+		else h.events.get(boundary)!();
+		await focused;
+		assert.equal(h.executions(), 1);
+	}
 });
 
 test("copy preserves local directory and script, while SSH already carries remote directory", () => {

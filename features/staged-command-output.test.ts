@@ -1,13 +1,27 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, statSync, rmSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync, writeFileSync, statSync, rmSync, mkdtempSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { captureInvocation, createCapture, cleanTerminalOutput, readCapture } from "./staged-command-output.ts";
 
 const supported = (process.platform === "darwin" || process.platform === "linux") && spawnSync("python3", ["--version"]).status === 0;
 const fixture = fileURLToPath(new URL("./staged-command-pty-fixture.py", import.meta.url));
+
+test("approved command returns output and resumes the agent without a post-command keypress", { skip: !supported, timeout: 15000 }, () => {
+	const temp = mkdtempSync(join(tmpdir(), "pi-command-return-test-"));
+	try {
+		const entry = fileURLToPath(new URL("./staged-command-return-fixture.ts", import.meta.url));
+		const result = spawnSync("python3", [fixture, "no-secret", process.execPath, entry], {
+			encoding: "utf8", timeout: 12000, env: { ...process.env, TMPDIR: temp, TMP: temp, TEMP: temp },
+		});
+		assert.equal(result.status, 0, result.stdout + result.stderr);
+		assert.match(result.stdout, /AUTO_RETURN_DELIVERED/);
+		assert.ok(!result.stdout.includes("Press Enter"));
+	} finally { rmSync(temp, { recursive: true }); }
+});
 
 test("PTY capture preserves exit status, stdout/stderr, and terminal availability", { skip: !supported }, () => {
 	const path = createCapture();

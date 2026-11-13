@@ -95,7 +95,6 @@ async function runInTerminal(ctx: ExtensionContext, command: StagedCommand): Pro
 			try { output = readCapture(outputPath); }
 			catch { output = `(Could not read captured output: ${outputPath}. Do not rerun blindly.)`; }
 			process.stdout.write(`\n${status}\n`);
-			spawnSync("/bin/sh", ["-c", "printf '\\nPress Enter to return to Pi… '; IFS= read -r reply"], { stdio: "inherit" });
 		} finally {
 			tui.start();
 			tui.requestRender(true);
@@ -112,18 +111,55 @@ export function registerStagedCommandsFeature(pi: ExtensionAPI): void {
 	let pending: StagedCommand | undefined;
 	let sequence = 0;
 	let running = false;
-	const widgetKey = "pi-adam-staged-command";
-	const clear = (ctx: ExtensionContext) => {
-		pending = undefined;
-		if (ctx.mode === "tui") ctx.ui.setWidget(widgetKey, undefined);
+	let autoReviewPending = false;
+	let activeReview: { command: StagedCommand; close: () => void } | undefined;
+	const closeReview = () => {
+		activeReview?.close();
+		activeReview = undefined;
 	};
-	pi.on("session_start", (_event, ctx) => clear(ctx));
-	pi.on("session_shutdown", (_event, ctx) => clear(ctx));
-	pi.on("agent_start", (_event, ctx) => {
-		if (ctx.mode === "tui") ctx.ui.setWidget(widgetKey, undefined);
+	const clear = () => {
+		pending = undefined;
+		autoReviewPending = false;
+		closeReview();
+	};
+	pi.on("session_start", () => clear());
+	pi.on("session_shutdown", () => clear());
+	pi.on("agent_start", () => closeReview());
+	pi.registerShortcut("alt+r", {
+		description: "Focus staged-command approval (Enter runs, Esc dismisses)",
+		handler: async ctx => showReview(ctx),
 	});
+	async function showReview(ctx: ExtensionContext, automatic = false): Promise<void> {
+		if (ctx.mode !== "tui" || !ctx.isIdle() || running || !pending || activeReview) return;
+		autoReviewPending = false;
+		const readyAt = performance.now() + (automatic ? 500 : 0);
+		const command = pending;
+		const review = { command, close: () => {} };
+		activeReview = review;
+		let action: CommandAction | undefined;
+		try {
+			action = await ctx.ui.custom<CommandAction | undefined>((_tui, theme, _keys, done) => {
+				review.close = () => done(undefined);
+				const widget = new StagedCommandWidget({ title: command.title, location: "", command: command.script }, theme, done, () => true, () => done(undefined), () => performance.now() >= readyAt);
+				widget.focused = true;
+				return widget;
+			}, { overlay: true, overlayOptions: { anchor: "bottom-center", width: "90%" } });
+		} finally {
+			if (activeReview === review) activeReview = undefined;
+		}
+		if (action) await act(action, command, ctx);
+	}
 	pi.on("agent_settled", (_event, ctx) => {
-		if (pending && !running) showWidget(pending, ctx);
+		if (!pending || !autoReviewPending || ctx.mode !== "tui" || running) return;
+		autoReviewPending = false;
+		if (ctx.ui.getEditorText().length > 0) {
+			ctx.ui.notify("Command ready for review. Alt+R opens approval when you're ready.", "info");
+			return;
+		}
+		// Never await human input from a settlement hook: notifications must finish.
+		void showReview(ctx, true).catch(error => {
+			ctx.ui.notify(error instanceof Error ? error.message : "Command review failed.", "error");
+		});
 	});
 
 	async function run(ctx: ExtensionContext): Promise<void> {
@@ -132,7 +168,7 @@ export function registerStagedCommandsFeature(pi: ExtensionAPI): void {
 		if (running) return;
 		const command = pending;
 		if (!command) { ctx.ui.notify("No staged command.", "info"); return; }
-		clear(ctx);
+		clear();
 		running = true;
 		try {
 			const result = await runInTerminal(ctx, command);
@@ -144,32 +180,17 @@ export function registerStagedCommandsFeature(pi: ExtensionAPI): void {
 		// Bind clicks to the visible revision, never a subsequently staged replacement.
 		if (pending !== command) { ctx.ui.notify("That staged command is no longer pending.", "warning"); return; }
 		if (action === "run") await run(ctx);
-		else if (action === "dismiss") clear(ctx);
+		else if (action === "dismiss") clear();
 		else {
 			await copyToClipboard(copiedCommand(command));
 			ctx.ui.notify("Copied command including working directory. Still pending.", "info");
 		}
 	}
 
-	function showWidget(command: StagedCommand, ctx: ExtensionContext): void {
-		if (ctx.mode !== "tui") return;
-		ctx.ui.setWidget(widgetKey, (tui, theme) => new StagedCommandWidget({
-			title: command.title,
-			metadata: commandMetadata(command),
-			location: `Directory: ${command.cwd ?? "SSH login directory"}`,
-			command: command.script,
-		}, theme, action => {
-			// Finish mouse dispatch before removing widgets or handing over the terminal.
-			setImmediate(() => { void act(action, command, ctx).catch(error => {
-				ctx.ui.notify(error instanceof Error ? error.message : "Command action failed.", "error");
-			}); });
-		}, () => tui.mode !== "fullscreen"), { placement: "aboveEditor" });
-	}
-
 	pi.registerTool({
 		name: "stage_command",
 		label: "Stage command for human",
-		description: "Stage a single local or SSH command. The user executes it with /run or cancels with /dismiss. Staging again replaces the previous command. NEVER executes or grants access. Use for one coherent human-reviewed operation, interactive sudo, or a query not covered by inspection tools. Prefer sshro_* for supported read-only inspection; use ssh_exec only with an explicit human unrestricted grant. Never seek a broad grant just to avoid approvals, or silently work around protected reads. Pass literal source in script; use target/root/interpreter/cwd rather than embedding SSH, sudo or interpreter wrappers. Transport quoting is handled for you. The human reviews the source and execution metadata; Copy includes the runnable transport command. Exact multiline scripts are preserved. Run shares captured terminal output with the agent and resumes it. Do not include secrets: scripts appear in the transcript and process arguments, and output is recorded to a private local file. Cleared on reload or session change. Finish your response after staging; do not poll or run it yourself.",
+		description: "Stage a single local or SSH command. A focused approval popup opens after the agent settles unless the user is drafting a message. Enter executes, Esc dismisses, Tab returns to chat; Alt+R reopens approval. /run and /dismiss also work. Staging again replaces the previous command. NEVER executes or grants access. Use for one coherent human-reviewed operation, interactive sudo, or a query not covered by inspection tools. Prefer sshro_* for supported read-only inspection; use ssh_exec only with an explicit human unrestricted grant. Never seek a broad grant just to avoid approvals, or silently work around protected reads. Pass literal source in script; use target/root/interpreter/cwd rather than embedding SSH, sudo or interpreter wrappers. Transport quoting is handled for you. The human reviews the source and execution metadata; Copy includes the runnable transport command. Exact multiline scripts are preserved. Command completion automatically shares captured terminal output with the agent and resumes it without another keypress. Do not include secrets: scripts appear in the transcript and process arguments, and output is recorded to a private local file. Cleared on reload or session change. Finish your response after staging; do not poll or run it yourself.",
 		parameters: Parameters,
 		renderCall(args, theme) {
 			return new Text(theme.fg("toolTitle", args.title || "Stage command"), 0, 0);
@@ -183,10 +204,11 @@ export function registerStagedCommandsFeature(pi: ExtensionAPI): void {
 			const command = prepareCommand(args, `CMD-${++sequence}`, ctx.cwd);
 			const replaced = pending !== undefined;
 			pending = command;
-			// Keep the card hidden until agent_settled, when approval can actually run.
-			if (ctx.mode === "tui") ctx.ui.setWidget(widgetKey, undefined);
+			autoReviewPending = true;
+			// Open only after settlement, never during the agent's turn.
+			closeReview();
 			const result = { id: command.id, status: "pending" as const };
-			const text = `${replaced ? "Replaced staged command" : "Staged command"} · ${commandReview(command)}\n\n/run executes · /dismiss cancels`;
+			const text = `${replaced ? "Replaced staged command" : "Staged command"} · ${commandReview(command)}\n\nApproval opens when the agent finishes · Enter runs · Esc dismisses · Alt+R reopens`;
 			return { content: [{ type: "text", text }], details: result, structuredContent: result };
 		},
 	});
@@ -195,7 +217,7 @@ export function registerStagedCommandsFeature(pi: ExtensionAPI): void {
 		description: "Discard the staged command",
 		async handler(_args, ctx) {
 			const hadCommand = pending !== undefined;
-			clear(ctx);
+			clear();
 			ctx.ui.notify(hadCommand ? "Staged command dismissed." : "No staged command.", "info");
 		},
 	});

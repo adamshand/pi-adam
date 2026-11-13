@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Text, truncateToWidth, visibleWidth, matchesKey, isKeyRepeat, isKeyRelease, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 
 /** A completed command is an inert transcript card, never another approval surface. */
 export function commandResultCard(content: string, theme: Theme): Component {
@@ -25,18 +25,24 @@ export type CommandAction = "run" | "copy" | "dismiss";
 type ButtonHit = { action: CommandAction; x: number; y: number; width: number };
 export type CommandCard = { title: string; metadata?: string; location: string; command: string };
 
-/** Non-focusable: typing and transcript scrolling stay with Pi. */
+/** Shared approval controls; automatic popups briefly guard accidental input. */
 export class StagedCommandWidget implements Component {
+	focused = false;
+	private keyboardActionPending = false;
 	private hits: ButtonHit[] = [];
 	private readonly card: CommandCard;
 	private readonly theme: Theme;
 	private readonly activate: (action: CommandAction) => void;
 	private readonly showKeyboardHint: () => boolean;
-	constructor(card: CommandCard, theme: Theme, activate: (action: CommandAction) => void, showKeyboardHint: () => boolean = () => true) {
+	private readonly leaveFocus: () => void;
+	private readonly canRun: () => boolean;
+	constructor(card: CommandCard, theme: Theme, activate: (action: CommandAction) => void, showKeyboardHint: () => boolean = () => true, leaveFocus: () => void = () => {}, canRun: () => boolean = () => true) {
 		this.card = card;
 		this.theme = theme;
 		this.activate = activate;
 		this.showKeyboardHint = showKeyboardHint;
+		this.leaveFocus = leaveFocus;
+		this.canRun = canRun;
 	}
 
 	render(width: number): string[] {
@@ -56,7 +62,8 @@ export class StagedCommandWidget implements Component {
 	/** Only approval controls live in the dock; the full review scrolls in the transcript. */
 	private renderContent(width: number): string[] {
 		const lines = [this.theme.fg("accent", truncateToWidth(`# ${this.card.title}`, width))];
-		const hint = this.showKeyboardHint() ? "Review script above · /run executes · /dismiss cancels" : "Review script above · Run shares output with the agent";
+		const hint = this.focused ? "Enter runs · Esc dismisses · Tab returns to chat"
+			: this.showKeyboardHint() ? "Alt+R focuses approval · /run or /dismiss" : "Review script above · Alt+R focuses approval";
 		lines.push(this.theme.fg("muted", truncateToWidth(hint, width)));
 		this.renderButtons(lines, width);
 		return lines;
@@ -82,11 +89,20 @@ export class StagedCommandWidget implements Component {
 		lines.push(row);
 	}
 
+	handleInput(data: string): void {
+		if (!this.focused || this.keyboardActionPending || isKeyRepeat(data) || isKeyRelease(data)) return;
+		if (matchesKey(data, "tab")) { this.leaveFocus(); return; }
+		const action = matchesKey(data, "enter") ? "run" : matchesKey(data, "escape") ? "dismiss" : undefined;
+		if (!action || (action === "run" && !this.canRun())) return;
+		this.keyboardActionPending = true;
+		this.activate(action);
+	}
+
 	handleMouse(event: TuiMouseEvent) {
 		if (event.button !== "left" || event.ctrl || event.alt || event.shift) return;
 		const hit = this.hits.find(item => event.y === item.y && event.x >= item.x && event.x < item.x + item.width);
 		if (!hit || (event.type !== "press" && event.type !== "click")) return;
-		if (event.type === "click") this.activate(hit.action);
+		if (event.type === "click" && (hit.action !== "run" || this.canRun())) this.activate(hit.action);
 		return { handled: true, render: false };
 	}
 
