@@ -49,6 +49,28 @@ export function resolveTimerDeadline(after: string | undefined, at: string | und
 	return deadline;
 }
 
+export function formatTimerTime(at: number): string {
+	return new Intl.DateTimeFormat("en-NZ", {
+		weekday: "short", day: "numeric", month: "short", year: "numeric",
+		hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true,
+		timeZoneName: "short",
+	}).format(at);
+}
+
+export function formatTimerRelative(at: number, now: number): string {
+	const seconds = (at - now) / 1000;
+	const magnitude = Math.abs(seconds);
+	const [unit, divisor] = magnitude < 60 ? ["second", 1] as const
+		: magnitude < 3600 ? ["minute", 60] as const
+			: magnitude < 86_400 ? ["hour", 3600] as const : ["day", 86_400] as const;
+	return new Intl.RelativeTimeFormat("en-NZ", { numeric: "always" }).format(Math.round(seconds / divisor), unit);
+}
+
+function formatPendingTimers(timers: Timer[], now: number): string {
+	return timers.length === 0 ? "No pending timers." : timers.map((timer) =>
+		`${timer.id} · ${formatTimerTime(timer.at)} · ${formatTimerRelative(timer.at, now)} · ${timer.message}`).join("\n");
+}
+
 export function registerTimersFeature(pi: ExtensionAPI): void {
 	let timers: Timer[] = [];
 	let handle: ReturnType<typeof setTimeout> | undefined;
@@ -81,8 +103,8 @@ export function registerTimersFeature(pi: ExtensionAPI): void {
 				pi.sendMessage({
 					customType: "pi-adam-timer-wakeup",
 					display: true,
-					content: `Timer wake-up at ${new Date(now).toISOString()}:\n${due.map((timer) =>
-						`- ${timer.id}, scheduled ${new Date(timer.at).toISOString()}: ${timer.message}`).join("\n")}`,
+					content: `Timer woke at ${formatTimerTime(now)}:\n${due.map((timer) =>
+						`- ${timer.id}, scheduled for ${formatTimerTime(timer.at)}: ${timer.message}`).join("\n")}`,
 					details: { timers: due, firedAt: now },
 				}, { triggerTurn: true, deliverAs: "followUp" });
 			}
@@ -130,7 +152,10 @@ export function registerTimersFeature(pi: ExtensionAPI): void {
 				persist();
 				arm();
 				const details = { ...listing(), id: timer.id, at: new Date(at).toISOString() };
-				return { content: [{ type: "text", text: JSON.stringify(details) }], details, structuredContent: details };
+				return {
+					content: [{ type: "text", text: `Timer set for ${formatTimerTime(at)} · ${formatTimerRelative(at, Date.parse(details.now))}\n${timer.id} · ${timer.message}` }],
+					details, structuredContent: details,
+				};
 			}
 			if (params.action === "cancel") {
 				if (!timers.some((timer) => timer.id === params.id)) throw new Error(`No pending timer ${params.id}.`);
@@ -139,7 +164,8 @@ export function registerTimersFeature(pi: ExtensionAPI): void {
 				arm();
 			}
 			const details = listing();
-			return { content: [{ type: "text", text: JSON.stringify(details) }], details, structuredContent: details };
+			const text = `${params.action === "cancel" ? `Timer cancelled: ${params.id}\n` : ""}${formatPendingTimers(timers, Date.parse(details.now))}`;
+			return { content: [{ type: "text", text }], details, structuredContent: details };
 		},
 	});
 
@@ -162,8 +188,7 @@ export function registerTimersFeature(pi: ExtensionAPI): void {
 				persist();
 				arm();
 			}
-			ctx.ui.notify(timers.length === 0 ? "No pending timers." : timers.map((timer) =>
-				`${timer.id} · ${new Date(timer.at).toISOString()} · ${timer.message}`).join("\n"), "info");
+			ctx.ui.notify(formatPendingTimers(timers, Date.now()), "info");
 		},
 	});
 }
