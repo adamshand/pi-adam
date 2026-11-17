@@ -1,3 +1,4 @@
+import { FocusSpanSchema, type FocusSpan } from "./time-tracking-focus.ts";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
@@ -14,7 +15,8 @@ const RequestSchema = Type.Object({
 	action: Type.Union([Type.Literal("model"), Type.Literal("thinking"), Type.Literal("fast")]),
 }, { additionalProperties: false });
 export type FooterAction = Static<typeof RequestSchema>["action"];
-export type FooterControlEndpoint = { socket: string; owner: string; session: string; client: string; node: string };
+const FocusRequestSchema = Type.Object({ owner: Type.String(), session: Type.String(), action: Type.Literal("focus"), span: FocusSpanSchema }, { additionalProperties: false });
+export type FooterControlEndpoint = { focusSpans?: boolean; focusEpoch?: number; socket: string; owner: string; session: string; client: string; node: string };
 export type FooterControlResult = { ok: true } | { ok: false; error: string };
 
 export function footerModelRotation(ctx: ExtensionContext) {
@@ -55,7 +57,7 @@ export class FooterControlServer {
 	private handling = false;
 	private inFlight: Promise<void> | undefined;
 
-	async start(session: string, handle: (action: FooterAction) => Promise<FooterControlResult>): Promise<FooterControlEndpoint | undefined> {
+	async start(session: string, handle: (action: FooterAction) => Promise<FooterControlResult>, focus?: (span: FocusSpan) => void): Promise<FooterControlEndpoint | undefined> {
 		// Windows named pipes have different permissions. Do not expose an unprotected endpoint.
 		if (process.platform === "win32") return undefined;
 		this.directory = await mkdtemp(join(tmpdir(), "pif-"));
@@ -79,8 +81,13 @@ export class FooterControlServer {
 				const reply = (result: FooterControlResult) => { socket.end(`${JSON.stringify(result)}\n`); };
 				let request: unknown;
 				try { request = JSON.parse(input.trim()); } catch { reply({ ok: false, error: "Invalid footer request." }); return; }
-				if (!Check(RequestSchema, request) || request.owner !== owner || request.session !== session || this.stopped) {
+				if (!(Check(RequestSchema, request) || Check(FocusRequestSchema, request)) || request.owner !== owner || request.session !== session || this.stopped) {
 					reply({ ok: false, error: "This Pi session has changed. Wait for the footer to refresh." });
+					return;
+				}
+				if (request.action === "focus") {
+					try { focus?.(request.span); reply(focus ? { ok: true } : { ok: false, error: "Focus reporting unavailable." }); }
+					catch { reply({ ok: false, error: "Focus report failed." }); }
 					return;
 				}
 				if (this.handling) { reply({ ok: false, error: "A footer change is already in progress." }); return; }
@@ -102,7 +109,7 @@ export class FooterControlServer {
 			server.on("error", () => { /* Existing sessions continue if the control listener fails. */ });
 			await chmod(socketPath, 0o600);
 			server.unref();
-			return { socket: socketPath, owner, session, node: process.execPath,
+			return { focusSpans: false, socket: socketPath, owner, session, node: process.execPath,
 				client: fileURLToPath(new URL("../herdr/app/status/control-client.js", import.meta.url)) };
 		} catch {
 			await this.stop();

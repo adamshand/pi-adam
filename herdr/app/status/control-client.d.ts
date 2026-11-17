@@ -3,4 +3,5 @@ import type { FooterControlEndpoint, FooterControlResult } from "../../../featur
 export function sendFooterControl(
 	endpoint: Pick<FooterControlEndpoint, "socket" | "owner" | "session">,
 	action: string,
+	span?: import("../../../features/time-tracking-focus.ts").FocusSpan,
 ): Promise<FooterControlResult>;

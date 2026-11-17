@@ -3,10 +3,10 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, exec, window, watchFolder } from "herdr";
+import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, exec, window, watchFolder, checking } from "herdr";
 import { affectsGitStatus, GitInvalidations } from "./git-events.js";
 
-const clean = (s) => (s ?? "").replace(/^[^\p{L}\p{N}]+/u, "").trim();
+const clean = (s) => (s ?? "").replace(/^[^\p{L}\p{N}\p{Ps}\p{Pi}]+/u, "").replace(/^\[ [!.] \] /, "").trim();
 
 function lead(tab, all = panes()) {
   const mine = all.filter(p => p.tab === tab.id && p.terminal);
@@ -16,8 +16,9 @@ function lead(tab, all = panes()) {
 function title(tab, l) {
   const prog = l?.program?.name;
   const live = clean(l?.title);
-  const telling = live && live !== prog && !/^[~/]|^[A-Za-z]:\\/.test(live) && !live.includes("@") && live.toLowerCase() !== l?.program?.key;
-  return tab.name === prog && telling ? live : tab.name;
+  const path = /^[~/]|^[A-Za-z]:\\/.test((l?.title ?? "").replace(/^[^\p{L}\p{N}~/]+/u, ""));
+  const telling = live && live !== l?.terminal && live !== prog && !path && !live.includes("@") && live.toLowerCase() !== l?.program?.key;
+  return (tab.name === prog || !tab.named) && telling ? live : tab.named ? tab.name : prog ?? "Terminal";
 }
 const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
 // A sub-agent without a pane isn't in agents(): its raw word, error counting as
@@ -56,21 +57,28 @@ export default class Agents extends View {
     this.gitEvents = new GitInvalidations();
     this.gitWatches = new Map();
     this.gitLocations = new Map();
+    this.closed = false;
+    this.folded = new Set();
+    // Saved state is untrusted: a damaged value must not break the whole sidebar.
+    try { this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}"); } catch { this.changed = {}; }
+    if (!this.changed || Object.getPrototypeOf(this.changed) !== Object.prototype) this.changed = {};
+    this.changed = Object.fromEntries(Object.entries(this.changed).filter(([, value]) => value && Number.isFinite(value.at) && Object.hasOwn(RANK, value.s)));
+    try { this.pins = JSON.parse(localStorage.getItem("pins") ?? "[]"); } catch { this.pins = []; }
+    this.pins = Array.isArray(this.pins) ? this.pins.filter(pin => String(pin) === pin) : [];
+    if (checking()) return;
     this.refreshGit(cx);
     cx.timer.every(5000, cx => this.refreshGit(cx));
-    this.folded = new Set();
-    // Each agent's last state and when it changed (ms), kept across restarts.
-    this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}");
-    this.pins = JSON.parse(localStorage.getItem("pins") ?? "[]");
     cx.timer.every(30000, (cx) => cx.notify());
   }
 
   async watchGit(key, cwd, cx) {
-    if (this.gitLocations.has(key)) return;
-    this.gitLocations.set(key, true);
+    if (checking() || this.closed || this.gitLocations.has(key)) return;
+    const location = {};
+    this.gitLocations.set(key, location);
     try {
       // Linked worktrees have a private HEAD/index and shared refs/config.
-      const result = await exec("git", ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"], { cwd });
+      const result = await exec("git", ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"], { cwd, timeout: 5000 });
+      if (this.closed || !this.pruneGitWatches().has(key) || this.gitLocations.get(key) !== location) return;
       if (result.code !== 0) { this.gitLocations.delete(key); return; }
       for (const root of new Set(result.stdout.trim().split("\n").filter(path => path.startsWith("/")))) {
         let watch = this.gitWatches.get(root);
@@ -79,27 +87,62 @@ export default class Agents extends View {
         this.gitWatches.set(root, watch);
         cx.spawn(async cx => {
           try {
-            for (;;) {
-              const paths = await watchFolder(root);
+            while (this.gitWatches.get(root) === watch) {
+              watch.pending = watchFolder(root);
+              const paths = await watch.pending;
+              if (this.gitWatches.get(root) !== watch) break;
               if (!affectsGitStatus(root, paths)) continue;
               this.gitEvents.changed(watch.keys, callback => cx.timer.after(400, callback), cx => this.refreshGit(cx));
             }
           } catch {
             // Missing/replaced metadata or a failed watcher: retry at the slow refresh.
-            this.gitWatches.delete(root);
-            for (const key of watch.keys) this.gitLocations.delete(key);
+            if (this.gitWatches.get(root) === watch) {
+              this.gitWatches.delete(root);
+              for (const key of watch.keys) this.gitLocations.delete(key);
+            }
           }
         });
       }
       // Close the discovery/watch-start gap once, without a repeating Git poll.
       this.gitEvents.changed([key], callback => cx.timer.after(400, callback), cx => this.refreshGit(cx));
-    } catch { this.gitLocations.delete(key); }
+    } catch { if (this.gitLocations.get(key) === location) this.gitLocations.delete(key); }
+  }
+
+  pruneGitWatches() {
+    const ps = panes(), sp = spaces();
+    const live = new Set(agents().flatMap(a => {
+      const cwd = ps.find(p => p.terminal === a.address)?.cwd;
+      const on = sp.find(s => s.id === a.space)?.machine ?? null;
+      return cwd && !on ? [JSON.stringify([on, cwd])] : [];
+    }));
+    for (const key of this.gitLocations.keys()) {
+      if (live.has(key)) continue;
+      this.gitLocations.delete(key);
+      delete this.git[key];
+      this.gitEvents.revisions.delete(key);
+    }
+    for (const [root, watch] of this.gitWatches) {
+      for (const key of watch.keys) if (!live.has(key)) watch.keys.delete(key);
+      if (watch.keys.size) continue;
+      this.gitWatches.delete(root);
+      watch.pending?.cancel();
+    }
+    return live;
+  }
+
+  close() {
+    this.closed = true;
+    for (const watch of this.gitWatches?.values() ?? []) watch.pending?.cancel();
+    this.gitWatches?.clear();
+    this.gitLocations?.clear();
   }
 
   // Refresh only new/changed working folders or agent states, else once a minute
   // while visible. This preserves the old second row without per-frame subprocesses.
   refreshGit(cx) {
-    if (this.gitBusy || !window()?.active) return;
+    if (checking() || this.closed || this.gitBusy) return;
+    this.pruneGitWatches();
+    if (!window()?.active) return;
     const ps = panes();
     const sp = spaces();
     const now = Date.now();
@@ -123,7 +166,7 @@ export default class Agents extends View {
         for (const [key, {on, cwd, signature, revision}] of due) {
           let branch = "", status = "";
           try {
-            const r = await exec("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain=v2", "--branch"], { on, cwd });
+            const r = await exec("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain=v2", "--branch"], { on, cwd, timeout: 10000 });
             if (r.code === 0) {
               let staged = 0, modified = 0, untracked = 0, ahead = 0, behind = 0;
               for (const line of r.stdout.split("\n")) {
@@ -140,6 +183,9 @@ export default class Agents extends View {
               status = [staged && "+" + staged, modified && "~" + modified, untracked && "?" + untracked, ahead && "↑" + ahead, behind && "↓" + behind].filter(Boolean).join(" ");
             }
           } catch { /* Offline machines and non-repos have no git row. */ }
+          if (this.closed) return;
+          // The pane may have closed/moved while Git was running.
+          if (!on && !this.pruneGitWatches().has(key)) continue;
           this.git[key] = { branch, status, at: Date.now(), signature, revision };
           if (!on) void this.watchGit(key, cwd, cx);
         }
@@ -161,12 +207,12 @@ export default class Agents extends View {
     // Gone and old: the list alone is empty right after a start.
     const listed = new Set(list.map((a) => a.address));
     for (const [k, c] of Object.entries(this.changed)) if (!listed.has(k) && now - c.at > 30 * 86400000) delete this.changed[k];
-    localStorage.setItem("changed", JSON.stringify(this.changed));
+    if (!checking()) localStorage.setItem("changed", JSON.stringify(this.changed));
   }
 
   setPins(pins) {
     this.pins = pins;
-    localStorage.setItem("pins", JSON.stringify(pins));
+    if (!checking()) localStorage.setItem("pins", JSON.stringify(pins));
   }
 
   // Drops pins of agents that ended. Only for machines the list has heard from:
@@ -273,6 +319,7 @@ export default class Agents extends View {
   render(cx) {
     const t = theme();
     if (props()?.sortMenu) return this.sortMenu(t);
+    if (!checking()) this.pruneGitWatches();
     const collapsed = shared("sidebar.collapsed") === true;
     const sort = sortOf();
     let list = agents();
@@ -290,7 +337,7 @@ export default class Agents extends View {
     const pinned = this.pins.map((p) => list.find((a) => a.address === p)).filter(Boolean);
     const rest = list.filter((a) => !this.pins.includes(a.address));
     list = [...pinned, ...rest];
-    setAgentOrder(list.map((a) => a.address));
+    if (!checking()) setAgentOrder(list.map((a) => a.address));
 
     const withKids = (a, i) => {
       const subs = collapsed ? [] : this.tree(all, a.address);
@@ -397,7 +444,7 @@ export default class Agents extends View {
         .on_click(() => run("pane.focus", { pane: a.pane }))
         .child(h_flex().gap(7).items_center()
           .child(this.status(t, a))
-          .child(div().flex_none().max_w(140).truncate().font_bold().text_color("#879A39").child(a.tab_name || label(a)))
+          .child(div().flex_none().max_w(140).truncate().font_bold().text_color("#879A39").child(label(a)))
           .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(a.space_name))
           .when(Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
           .when(subs.length > 0, el => el.child(fold(a, subs)))

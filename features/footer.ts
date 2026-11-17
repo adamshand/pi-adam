@@ -1,9 +1,10 @@
+import type { TrackingFocus } from "./time-tracking.ts";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { isCodexModel, registerCodexFastFeature } from "./codex-fast.ts";
 import { isCodexImageModel } from "./codex-image.ts";
-import { registerCodexUsageFeature } from "./codex-usage.ts";
+import { registerCodexUsageFeature, type CodexUsageSnapshot } from "./codex-usage.ts";
 import { isClaudeCodeModel, registerClaudeUsageFeature } from "./claude-usage.ts";
 import { centeredFooter, readFooterGitStats, type FooterGitStats } from "./footer-git.ts";
 import { watchFooterGit } from "./footer-git-watch.ts";
@@ -23,7 +24,7 @@ type FooterPalette = {
 
 type UsageView = {
 	status: string;
-	snapshot?: { fiveHourUsed?: number; weeklyUsed?: number; availableResets?: number };
+	snapshot?: CodexUsageSnapshot;
 };
 
 type FooterMetrics = {
@@ -98,6 +99,7 @@ function formatTimestamp(value: number | undefined): string {
 export function registerFooterFeature(
 	pi: ExtensionAPI,
 	environment: Readonly<Record<string, string | undefined>> = process.env,
+	tracking?: TrackingFocus,
 ): void {
 	let footerInstalled = false;
 	let currentCtx: ExtensionContext | undefined;
@@ -145,7 +147,7 @@ export function registerFooterFeature(
 			contextWindow: metrics.contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0,
 			speed: lastSpeed,
 			git: gitStats,
-			controls: controlEndpoint ? { ...controlEndpoint, idle: ctx.isIdle() && !ctx.hasPendingMessages(), actions } : undefined,
+			controls: controlEndpoint ? { ...controlEndpoint, ...tracking?.focusSubscription(), idle: ctx.isIdle() && !ctx.hasPendingMessages(), actions } : undefined,
 			usage: usage && { status: usage.status, ...usage.snapshot },
 		});
 	};
@@ -153,6 +155,7 @@ export function registerFooterFeature(
 		requestFooterRender?.();
 		void publishMetrics();
 	};
+	tracking?.onFocusRequest(() => { void publishMetrics(); });
 	const codexFast = registerCodexFastFeature(pi, requestRender);
 	const codexUsage = registerCodexUsageFeature(pi, requestRender);
 	const claudeUsage = registerClaudeUsageFeature(pi, requestRender);
@@ -280,7 +283,7 @@ export function registerFooterFeature(
 					refreshContext(context);
 					await publishMetrics();
 					return result;
-				});
+				}, tracking?.focus);
 			} catch {
 				// Control setup failure must not remove the read-only native footer.
 				await controlServer.stop().catch(() => undefined);
@@ -338,7 +341,7 @@ export function registerFooterFeature(
 						? colorize(palette.error, "!")
 						: usage?.status === "stale"
 							? colorize(palette.warning, "~")
-							: usage?.status === "loading"
+							: usage?.status === "loading" && !usage.snapshot
 								? theme.fg("dim", "…")
 								: "";
 					const codexStr = usage?.snapshot

@@ -10,7 +10,7 @@ const ResultSchema = Type.Union([
 ]);
 
 /** No shell or terminal input. A timed, single request to the session's private local socket. */
-export function sendFooterControl(endpoint, action) {
+export function sendFooterControl(endpoint, action, span) {
   return new Promise(resolve => {
     const socket = createConnection(endpoint.socket);
     let input = "";
@@ -26,7 +26,11 @@ export function sendFooterControl(endpoint, action) {
     socket.setEncoding("utf8");
     socket.on("error", unavailable);
     socket.on("end", unavailable);
-    socket.on("connect", () => socket.write(`${JSON.stringify({ owner: endpoint.owner, session: endpoint.session, action })}\n`));
+    socket.on("connect", () => {
+      const request = { owner: endpoint.owner, session: endpoint.session, action };
+      if (span) request.span = span;
+      socket.write(`${JSON.stringify(request)}\n`);
+    });
     socket.on("data", chunk => {
       input += chunk;
       if (input.length > 4096) { unavailable(); return; }
@@ -41,9 +45,9 @@ export function sendFooterControl(endpoint, action) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const [socket, owner, session, action] = process.argv.slice(2);
-  const result = socket && owner && session && ["model", "thinking", "fast"].includes(action)
-    ? await sendFooterControl({ socket, owner, session }, action)
+  const [socket, owner, session, action, encodedSpan] = process.argv.slice(2);
+  const result = socket && owner && session && ["model", "thinking", "fast", "focus"].includes(action)
+    ? await sendFooterControl({ socket, owner, session }, action, encodedSpan ? JSON.parse(encodedSpan) : undefined)
     : { ok: false, error: "Invalid footer control arguments." };
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }

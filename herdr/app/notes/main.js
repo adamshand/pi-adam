@@ -1,8 +1,8 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Button, Textarea, TextareaState } from "gpui-base";
-import { focused, terminals, spaces, props, theme, exec, readTextFile, writeTextFile, layout, window } from "herdr";
+import { focused, terminals, spaces, props, theme, exec, readTextFile, writeTextFile, layout, window, checking } from "herdr";
 import { resolveSession } from "./session.js";
-import { NoteDocument } from "./model.js";
+import { NoteDocument, deleteForward, continueList, nestListAfterTab } from "./model.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -13,6 +13,7 @@ function find(node, id) {
 export default class Notes extends View {
   init(_props, cx) {
     this.config = props(); this.documents = new Map(); this.key = null; this.message = "";
+    if (checking()) return;
     cx.timer.every(750, cx => {
       for (const entry of this.documents.values()) {
         if (entry.doc.dirty && !entry.doc.busy && !entry.doc.error) cx.spawn(async cx => { const saving = entry.doc.save(); cx.notify(); await saving; cx.notify(); });
@@ -21,6 +22,7 @@ export default class Notes extends View {
     });
   }
   sync(cx) {
+    if (checking()) return;
     const focus = focused(), context = resolveSession(focus, terminals());
     const space = spaces().find(space => space.id === focus?.space);
     const cwd = context.session?.cwd || focus?.cwd || space?.folder;
@@ -32,7 +34,7 @@ export default class Notes extends View {
     if (remote || !cwd) return;
     cx.spawn(async cx => {
       try {
-        const result = await exec(this.config.node || "node", [this.config.reader, cwd]);
+        const result = await exec(this.config.node || "node", [this.config.reader, cwd], { timeout: 5000 });
         if (result.code !== 0) throw new Error("Project unavailable");
         const project = JSON.parse(result.stdout);
         let entry = this.documents.get(project.path);
@@ -49,7 +51,18 @@ export default class Notes extends View {
         if (this.key !== key) return;
         if (!entry.state) {
           entry.state = TextareaState.new({ value: entry.doc.text, placeholder: "Project notes, useful commands, things to remember…", rows: 20 });
-          entry.state.on("change", (_event, cx) => { entry.doc.edit(entry.state.value()); cx.notify(); });
+          entry.state.on("change", (_event, cx) => {
+            // Our own replacement re-emits change; don't reinterpret it as another Tab.
+            if (!entry.adjusting) { entry.adjusting = true; try { nestListAfterTab(entry.doc.text, entry.state); } finally { entry.adjusting = false; } }
+            entry.doc.edit(entry.state.value()); cx.notify();
+          });
+          // Textarea emits submit after inserting its newline; Shift-Enter is a plain newline.
+          entry.state.on("submit", (event, cx) => {
+            if (event.shift || entry.adjusting) return;
+            entry.adjusting = true;
+            try { if (!continueList(entry.state)) return; } finally { entry.adjusting = false; }
+            entry.doc.edit(entry.state.value()); cx.notify();
+          });
           entry.state.on("focus", (_event, cx) => { entry.focused = true; cx.notify(); });
           entry.state.on("blur", (_event, cx) => { entry.focused = false; cx.notify(); });
         }
@@ -75,7 +88,7 @@ export default class Notes extends View {
       finally { doc.busy = false; cx.notify(); }
     });
   }
-  async close() { await Promise.all([...this.documents.values()].map(entry => entry.doc.save())); }
+  async close() { if (checking()) return; await Promise.all([...this.documents.values()].map(entry => entry.doc.save())); }
   render(cx) {
     this.sync(cx);
     const t = theme(), entry = this.current;
@@ -115,6 +128,12 @@ export default class Notes extends View {
         .border_1().border_color(entry.focused ? t.accent : t.border).bg(t.surface).cursor_text()
         // Keep the enclosing layout from reclaiming keyboard focus for the terminal.
         .on_mouse_down("left", (_event, cx) => { state.focus(); cx.stop_propagation(); })
+        .on_key_down((event, cx) => {
+          if (event.keystroke !== "ctrl-d") return;
+          cx.stop_propagation();
+          deleteForward(state);
+          cx.notify();
+        })
         .child(Textarea.new(state).flex_1().min_h(0).w_full().p(8).text_color(t.foreground)));
   }
 }

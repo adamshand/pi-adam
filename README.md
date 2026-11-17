@@ -13,12 +13,13 @@ Personal pi quality-of-life extension.
 - Bundles a pinned `agent-browser` CLI and loads its current core skill on demand for headless application testing.
 - Gives every Pi session isolated browser state, bounded output, and a 15-minute idle-cleanup backstop.
 - Adds Pi-specific orchestration guidance for parallel Luna scouts and fresh Kimi/Grok change reviews through `pi-subagents`.
-- Adds a dim, right-aligned local completion timestamp after each final settled agent response.
+- Adds a dim, right-aligned local completion timestamp after each final settled agent response, with a billable-time snapshot when `/track` is enabled.
 - Loads dotenv-style variables from `~/.pi/env`, then trusted project `.pi/env` files. Existing shell variables take precedence.
 - `/env` lists variables declared by those files with values redacted.
 - `/codex-usage` shows Codex usage, reset times, and available banked resets; `/codex-usage-refresh` refreshes it immediately.
 - `/pi-adam-status` reports model, Fast injection, usage freshness/errors, image eligibility, footer cost, and context diagnostics.
 - In the new Herdr Mac app, the personal `adam-status` footer shows the focused Pi pane's model, thinking/Fast mode, speed, cost, context, and Codex limits. Click model/thinking to cycle or Fast to toggle while idle, without typing into the terminal or changing global defaults. Pi hides its own footer only after the native mod acknowledges its runtime; elsewhere the terminal footer remains unchanged. Existing sessions need `/reload` once. See [`herdr/app/README.md`](herdr/app/README.md#native-pi-footer).
+- `read_project_note` reads the current project's saved human-owned Herdr note without creating files or injecting notes into prompts. Git worktrees/subfolders share identity; output is bounded and the result includes the note path.
 - Slash-command usage is stored in `state.json` next to this extension.
 - `/pi-adam-mru` shows the recent list; `/pi-adam-mru reset` clears it.
 - Inside Herdr, Pi `/name` values automatically rename the tab and appear in the agents panel.
@@ -114,6 +115,42 @@ Timer results, wake-ups, and `/timers` display friendly dates and times in the m
 Use `/timers` to inspect pending timers, `/timers cancel <id>` to cancel one, or `/timers cancel all` to cancel every pending timer. Timers belong to the session across conversation branches; cancellation or firing is not undone by tree navigation. Reload restores deadlines. Closing or switching sessions clears live callbacks; resuming the original session delivers overdue timers once.
 
 Pi must remain running for on-time delivery. Timers do not launch Pi or wake a sleeping computer, and print-mode invocations should not be used as background schedulers. No model requests are made while waiting by the timer feature. Pending timers are consumed before queuing a wake-up to avoid duplicate delivery; a process crash during dispatch can lose that wake-up.
+
+## Billable-time tracking
+
+Use **`/track`** to start or resume explicit wall-clock tracking for this Pi session. It includes time spent reading, reviewing and testing between turns—not just model execution. Repeating `/track` while running reports the total without starting another interval.
+
+- **`/track pause`** stops the current interval and preserves the total.
+- **`/track status`** shows the total, each interval's local start/end and exact duration, and the ledger path.
+- **`/track clear`** asks for confirmation, stops tracking and resets the visible total to zero. The previous record is archived locally rather than deleted.
+
+Each completed response's date gains a snapshot such as **`(tracking 1h 12m)`** or **`(paused 1h 12m)`**. Old timestamps retain their historical total; this is not a live ticker. Displayed totals use whole minutes, but interval endpoints retain millisecond precision with no invoice rounding. Clearing hides the suffix until tracking starts again.
+
+Tracking survives `/reload`. Normal quit, session switching and forking pause the old session; a new/forked session starts with no billable time. After a crash or reboot, an open interval is **excluded from the total until reviewed**. Run `/track` (or `/track pause`) to choose its last observed time, supply an explicit ISO end time with timezone, or discard that interrupted interval. Cancelling leaves it unresolved. Checkpoints are saved at user-message completion, settlement and tracking commands—no heartbeat timer. Time after the last checkpoint is not automatically assumed billable; you can supply the actual end time.
+
+Starting while another session has an open or unresolved tracker shows an overlap warning. It does not pause the other tracker or deduplicate billing automatically. A duplicate live Pi process cannot modify the same session's running tracker. Session totals are independent of conversation branches; tree navigation cannot resurrect or erase billed intervals. Tracking requires an interactive, saved session.
+
+The private ledger is `~/.local/state/pi-adam/time-tracking/tracking.sqlite` (or under `$XDG_STATE_HOME`). SQLite transactions and record revisions protect concurrent updates and interrupted writes; the directory is created with mode 0700 and the database uses 0600. It stores session IDs, working directories, interval endpoints and process ownership—not prompts or credentials. It uses Node's built-in `node:sqlite` and `/bin/ps` (macOS/Linux) to verify process birth times; PID reuse cannot claim an old tracker, and wall-clock corrections do not change ownership across reload. Failed writes and invalid records are reported, never silently reset. Preserve this ledger when backing up billing records; conversation files alone do not contain the complete ledger.
+
+Idle is a separate breakdown: tracking must be running, Pi must be waiting, and its terminal must be unfocused (including when the Herdr app is inactive). Thinking, tools, retries and queued continuations are working time even while away. Settled time and standard extension select/confirm/input/editor prompts count as waiting; arbitrary tool waits and custom screens are not inferred. There is no grace period and idle is never subtracted from the full total.
+
+Focus support requires the updated personal `adam-status` mod in local Herdr sessions. It sends closed focus spans through the existing private footer socket only for tracking subscriptions, on focus transitions or explicit Pi checkpoints, without polling or heartbeat timers. Unrelated redraws spawn no focus helpers. **Only confirmed spans count:** the tail after the last reported observation stays unknown until a focus transition or checkpoint confirms it. A provider crash cannot extend that tail indefinitely. Delivery failures, unsupported terminals, old ledger records and reload gaps remain unknown. `/track status` shows friendly durations plus exact idle and unknown-focus milliseconds; turn stamps show minute snapshots of both. Historical stamps are not revised by later reports.
+
+This deliberately conservative implementation can undercount idle at pause/clear/quit or after a crash. In particular, a clear archives only coverage already delivered. Multiple Herdr clients/windows reporting to one Pi runtime are unsupported: a newer provider generation takes over, retaining covered history and leaving the disconnected gap unknown. App restarts and mod hot reloads recover without a Pi reload; delayed retired-provider messages are rejected. Remote sessions have no focus support. DEC 1004 is not used: Pi enables it for fullscreen mouse mode, but regular-terminal and Herdr focus delivery have not been verified. See [native integration](herdr/app/README.md#idle-focus-coverage) for deployment and validation.
+
+Tracking has no sleep exclusion, client/project grouping, export, completed-interval editor, invoice rounding or automatic cleanup. If the laptop sleeps with tracking running, that elapsed time counts. Pause explicitly when you stop working, and review totals before invoicing. System-clock accuracy matters; backwards-clock writes are refused until corrected. Archived clear records remain in SQLite but do not yet have a browsing command.
+
+## Project notes and footer details
+
+The native Notes editor adds **Ctrl-D** forward delete (including the newline at the start of an empty line), with native change/undo handling. Other existing editor shortcuts remain unchanged; it does not install a global readline keymap.
+
+Agents can call **`read_project_note({})`** after Pi `/reload`. It reads only the saved note for the current working directory—no Herdr dependency, unsaved-draft access, directory creation, or write operation. The structured result is `{ project, path, exists, text, truncated }`; Codemode receives the same object. Reads stop at 48 KiB/2000 lines; use `read` on the returned path for more. Notes remain human-owned reference data, not instructions, and are not automatically loaded into prompts.
+
+Native footer hover details show **5-hour/weekly quota reset times** (local date/time plus time remaining) and **banked reset expiries**, including explicitly non-expiring credits and missing/partial details. Only count/expiry data is published, never credit IDs or profile data. Expiries come from the existing credits GET request, with no extra polling. Background quota refreshes no longer add temporary ellipses to populated quota labels; initial loading and stale/error feedback remain visible. Source Notes/Status mods must be deployed separately; updating Pi alone does not replace installed mods.
+
+## Herdr release reviews
+
+See [`herdr/RELEASE-REVIEWS.md`](herdr/RELEASE-REVIEWS.md) before reviewing an upgrade. Desktop app **0.1.12–0.1.16** and core **0.1.17–0.1.21** have been reviewed; start after those versions next time. The old Herdr TUI has separate releases.
 
 ## Herdr Pi recovery
 

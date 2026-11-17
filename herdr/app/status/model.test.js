@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FOOTER_LABEL, focusedMetrics, metricParts, visibleMetricParts, metricControl, controlInvocation } from "./model.js";
+import { FOOTER_LABEL, focusedMetrics, metricParts, visibleMetricParts, metricControl, controlInvocation, footerTooltip, resetCreditTooltip } from "./model.js";
 
 const snapshot = {
   version: 1, owner: "runtime", session_id: "session", model: "gpt-test", thinking: "high",
@@ -44,6 +44,42 @@ test("controls are opt-in, capability-aware, idle-only and use the clicked termi
   assert.deepEqual(local.args, ["/repo/control-client.js", "/tmp/private/s", "controller", "session", "model"]);
   assert.equal(controlInvocation(data, "vps/t1", "thinking").on, "vps");
   assert.equal(focusedMetrics({ terminal: "t1" }, [terminal("t1", { ...data, controls: { ...data.controls, session: "wrong" } })]), null);
+});
+
+test("background quota refresh never adds/removes visible suffixes on known values", () => {
+  const view = status => metricParts({ ...snapshot, usage: { ...snapshot.usage, status } }).map(({ text, tone, kind }) => ({ text, tone, kind }));
+  assert.deepEqual(view("loading"), view("ready"));
+  assert.ok(!view("loading").some(part => part.text.includes("…")));
+  assert.ok(metricParts({ ...snapshot, usage: { status: "loading" } }).some(part => part.text === "usage …"), "initial loading still has feedback");
+});
+
+test("hover details show quota reset times and partial credit expiries instead of duplicating metrics", () => {
+  const now = Date.parse("2026-11-15T00:00:00Z"), fiveHourResetAt = now / 1000 + 3600, weeklyResetAt = now / 1000 + 3 * 86400;
+  const data = { ...snapshot, usage: { status: "loading", fiveHourUsed: 10, weeklyUsed: 20, fiveHourResetAt, weeklyResetAt, availableResets: 4, resetExpirations: [weeklyResetAt, null] } };
+  const hover = footerTooltip(data, now);
+  assert.match(hover, /5-hour quota resets:.*local time; in 1h 0m/);
+  assert.match(hover, /Weekly quota resets:.*in 3d 0h/);
+  assert.match(hover, /4 banked resets/); assert.match(hover, /Reset 1: expires/);
+  assert.match(hover, /Reset 2: Does not expire/); assert.match(hover, /partial/); assert.match(hover, /Refreshing in background/);
+  assert.ok(!hover.includes(snapshot.model)); assert.ok(!hover.includes("$2.50"));
+  const parts = metricParts(data, now);
+  assert.match(parts.find(part => part.text.startsWith("5h")).tooltip, /5-hour quota resets/);
+  assert.match(parts.find(part => part.kind === "resets").tooltip, /expires/);
+  assert.match(resetCreditTooltip({ availableResets: 1 }, now), /Expiry details not reported/);
+  assert.equal(resetCreditTooltip({ availableResets: 0 }, now), "0 banked resets");
+  assert.match(footerTooltip({ usage: { fiveHourResetAt: now / 1000 - 1 } }, now), /time passed/);
+  assert.match(footerTooltip({ usage: {} }, now), /Not reported/);
+  assert.match(footerTooltip({}, now), /not available/);
+});
+
+test("new optional reset/expiry fields validate without accepting unsafe label values", () => {
+  const valid = { ...snapshot, usage: { status: "ready", fiveHourResetAt: 123, weeklyResetAt: 456, resetExpirations: [789, null] } };
+  assert.ok(focusedMetrics({ terminal: "t1" }, [terminal("t1", valid)]));
+  for (const usage of [
+    { status: "ready", fiveHourResetAt: "bad" }, { status: "ready", weeklyResetAt: -1 },
+    { status: "ready", resetExpirations: ["bad"] }, { status: "ready", resetExpirations: {} },
+    { status: "ready", resetExpirations: Array(65).fill(null) },
+  ]) assert.equal(focusedMetrics({ terminal: "t1" }, [terminal("t1", { ...snapshot, usage })]), null);
 });
 
 test("metric text retains model, mode, speed, cost, context and rate-limit health", () => {

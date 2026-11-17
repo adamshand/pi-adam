@@ -134,3 +134,19 @@ test("concurrent clicks cannot race; server failures never return raw diagnostic
 		assert.doesNotMatch(JSON.stringify(await first), /secret raw error/);
 	} finally { release?.(); await server.stop(); }
 });
+
+test("focus reports share private identity checks and never invoke footer actions", async () => {
+	const server = new FooterControlServer();
+	const seen: unknown[] = [];
+	const endpoint = await server.start("s", async () => { throw new Error("must not mutate controls"); }, span => { seen.push(span); });
+	assert.ok(endpoint);
+	const span = { providerStartedAt: 0, provider: "app", sequence: 1, start: 100, end: 200, focused: false };
+	try {
+		assert.equal(endpoint.focusSpans, false);
+		assert.deepEqual(await sendFooterControl(endpoint, "focus", span), { ok: true });
+		assert.equal((await sendFooterControl({ ...endpoint, owner: "stale" }, "focus", span)).ok, false);
+		assert.equal((await sendFooterControl(endpoint, "focus")).ok, false);
+		assert.equal((await sendFooterControl(endpoint, "focus", { ...span, sequence: -1 })).ok, false);
+		assert.deepEqual(seen, [span]);
+	} finally { await server.stop(); }
+});

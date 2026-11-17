@@ -4,6 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Parse } from "typebox/value";
 import type { FooterGitStats } from "./footer-git.ts";
+import type { CodexUsageSnapshot } from "./codex-usage.ts";
 import type { FooterAction, FooterControlEndpoint } from "./herdr-app-footer-controls.ts";
 
 export const HERDR_FOOTER_LABEL = "pi-adam.footer";
@@ -20,7 +21,7 @@ export type HerdrFooterMetrics = {
 	contextWindow: number;
 	speed?: number;
 	git?: FooterGitStats;
-	usage?: { status: string; fiveHourUsed?: number; weeklyUsed?: number; availableResets?: number };
+	usage?: CodexUsageSnapshot & { status: string };
 	controls?: FooterControlEndpoint & { idle: boolean; actions: FooterAction[] };
 };
 

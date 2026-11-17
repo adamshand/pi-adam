@@ -6,6 +6,7 @@ import {
 	isCodexUsageEligible,
 	registerCodexUsageFeature,
 	snapshotFromRateLimit,
+	snapshotFromResetCredits,
 	type CodexUsageFeature,
 } from "./codex-usage.ts";
 import { createTestExtensionApi, createTestExtensionContext } from "./test-extension.ts";
@@ -127,6 +128,41 @@ test("falls back to the legacy positions when durations are absent", () => {
 			weeklyResetAt: 200,
 		},
 	);
+});
+
+test("reset credit expiries use available rows only, keep count authoritative and expose no identities", () => {
+	const expiry = Date.parse("2026-12-01T00:00:00Z") / 1000;
+	assert.deepEqual(snapshotFromResetCredits({ available_count: 8, credits: [
+		{ id: "private-id", status: "available", expires_at: "2026-12-01T00:00:00Z", profile_user_id: "private-user" },
+		{ status: "redeemed", expires_at: "2026-11-01T00:00:00Z" },
+		{ status: "available", expires_at: null },
+		{ status: "available" },
+		{ status: "available", expires_at: "invalid" },
+		{ status: "unknown", expires_at: null },
+		{ status: "available", expires_at: 123 },
+		null,
+	] }), { availableResets: 8, resetExpirations: [expiry, null] });
+	assert.deepEqual(snapshotFromResetCredits({ available_count: 2 }), { availableResets: 2, resetExpirations: undefined });
+	assert.deepEqual(snapshotFromResetCredits({ available_count: 2, credits: null }), { availableResets: 2, resetExpirations: undefined });
+	assert.deepEqual(snapshotFromResetCredits({ available_count: 0, credits: [] }), { availableResets: 0, resetExpirations: [] });
+});
+
+test("existing GET credit request carries expiry details into the usage snapshot without extra requests", async () => {
+	const originalFetch = globalThis.fetch;
+	let fetchCount = 0;
+	globalThis.fetch = async input => {
+		fetchCount++;
+		return String(input).endsWith("rate-limit-reset-credits")
+			? Response.json({ available_count: 2, credits: [{ status: "available", expires_at: "2026-12-01T00:00:00Z" }] })
+			: successfulResponse(input);
+	};
+	const harness = createUsageHarness(model());
+	try {
+		await harness.emit("session_start");
+		assert.equal(fetchCount, 2);
+		assert.deepEqual(harness.feature.getState().snapshot?.resetExpirations, [Date.parse("2026-12-01T00:00:00Z") / 1000]);
+		assert.equal(harness.feature.getState().snapshot?.availableResets, 2);
+	} finally { await harness.emit("session_shutdown"); globalThis.fetch = originalFetch; }
 });
 
 test("limits polling to OAuth Codex models", async () => {

@@ -8,6 +8,7 @@ import {
 	type TurnStampData,
 } from "./turn-stamp.ts";
 import { createTestExtensionApi } from "./test-extension.ts";
+import type { TrackingStamp } from "./time-tracking.ts";
 
 type HarnessContext = { mode: "tui" | "print" };
 type Handler = (event: { message?: { role: "assistant" | "user" }; reason?: string }, ctx?: HarnessContext) => object | undefined;
@@ -24,7 +25,7 @@ type AppendedEntry = {
 	data: TurnStampData;
 };
 
-function createHarness(now = new Date(2026, 7, 18, 13, 53).getTime()) {
+function createHarness(now = new Date(2026, 7, 18, 13, 53).getTime(), tracking?: (at: number) => TrackingStamp | undefined) {
 	const handlers = new Map<string, Handler>();
 	const appended: AppendedEntry[] = [];
 	let renderer: StampRenderer | undefined;
@@ -40,7 +41,7 @@ function createHarness(now = new Date(2026, 7, 18, 13, 53).getTime()) {
 		},
 	};
 
-	registerTurnStampFeature(createTestExtensionApi(pi), () => now);
+	registerTurnStampFeature(createTestExtensionApi(pi), () => now, tracking);
 	return { appended, handlers, getRenderer: () => renderer };
 }
 
@@ -85,6 +86,24 @@ test("does not stamp user-only activity or non-TUI sessions", () => {
 	assert.deepEqual(print.appended, []);
 });
 
+test("completion stamps preserve the tracked total and append it after the date", () => {
+	const at = new Date(2026, 7, 18, 13, 53).getTime();
+	let total = 72 * 60_000;
+	const h = createHarness(at, timestamp => {
+		assert.equal(timestamp, at);
+		return { status: "tracking", milliseconds: total };
+	});
+	h.handlers.get("session_start")?.({ reason: "startup" }, { mode: "tui" });
+	h.handlers.get("turn_end")?.({ message: { role: "assistant" } });
+	h.handlers.get("agent_settled")?.({});
+	total = 0;
+	assert.equal(h.appended[0].data.tracking!.milliseconds, 72 * 60_000);
+	const component = h.getRenderer()!({ data: h.appended[0].data }, {}, { fg: (_color, text) => text });
+	assert.ok(component);
+	assert.match(component.render(100)[0], /Tue 18 August 2026, 1:53PM \(tracking 1h 12m\)$/);
+	for (const width of [1, 10, 40]) assert.ok(stripVTControlCharacters(component.render(width)[0]).length <= width);
+});
+
 test("renders the stamp dimmed, right-aligned, and width-safe", () => {
 	const completedAt = new Date(2026, 7, 18, 13, 53).getTime();
 	const { getRenderer } = createHarness(completedAt);
@@ -108,4 +127,12 @@ test("renders the stamp dimmed, right-aligned, and width-safe", () => {
 	const narrow = component.render(12)[0];
 	assert.ok(narrow);
 	assert.equal(stripVTControlCharacters(narrow), "Tue 18 Augus");
+});
+
+test("idle and unknown coverage render separately from the unchanged total", () => {
+	const h = createHarness();
+	const data: TurnStampData = { version: 1, completedAt: new Date(2026, 7, 18, 13, 53).getTime(),
+		tracking: { status: "paused", milliseconds: 120000, idleMilliseconds: 60000, unknownMilliseconds: 30000 } };
+	const component = h.getRenderer()!({ data }, {}, { fg: (_color, text) => text });
+	assert.match(component!.render(160)[0], /paused 2m; idle 1m; focus unknown 0m/);
 });

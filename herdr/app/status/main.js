@@ -1,18 +1,23 @@
+import { FocusReporter, terminalFocused } from "./focus.js";
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, agents, terminals, focused, theme, run, window, exec, notify } from "herdr";
-import { focusedMetrics, metricParts, visibleMetricParts, metricControl, controlInvocation } from "./model.js";
+import { spaces, agents, terminals, focused, theme, run, window, exec, notify, checking } from "herdr";
+import { focusedMetrics, metricParts, visibleMetricParts, metricControl, controlInvocation, footerTooltip } from "./model.js";
 
 /** Personal clone of workspace-status: Pi metrics belong to the active terminal only. */
 export default class WorkspaceStatus extends View {
   init() {
     this.width = 0;
+    this.focusReporter = new FocusReporter(`${Date.now()}-${Math.random()}`);
+    this.focusQueues = new Map();
+    this.closed = false;
     this.hosted = new Map();
     this.announcing = new Set();
     this.changing = false;
   }
 
   announce(list, cx) {
+    if (checking() || this.closed) return;
     for (const terminal of list) {
       const data = focusedMetrics({ terminal: terminal.address }, [terminal]);
       if (!data || this.announcing.has(terminal.address)) continue;
@@ -31,8 +36,55 @@ export default class WorkspaceStatus extends View {
     }
   }
 
+  reportFocus(list, cx) {
+    if (checking() || this.closed) return;
+    const focus = focused();
+    const active = window()?.active;
+    if (active !== true && active !== false) { this.focusReporter.records.clear(); return; }
+    const live = new Set();
+    for (const terminal of list) {
+      if (terminal.address.includes("/")) continue;
+      const data = focusedMetrics({ terminal: terminal.address }, [terminal]);
+      if (!data?.controls) continue;
+      const subscribed = data.controls.focusSpans === true;
+      if (!subscribed && !this.focusReporter.records.has(data.controls.owner)) continue;
+      const key = data.controls.owner;
+      if (subscribed) live.add(key);
+      const span = this.focusReporter.observe(key, terminalFocused(terminal.address, focus, active), Date.now(), data.controls.focusEpoch);
+      if (!subscribed) this.focusReporter.forget(key);
+      if (!span) continue;
+      const queue = this.focusQueues.get(key);
+      if (queue) {
+        if (queue.length < 32) queue.push(span);
+        else { queue.length = 0; this.focusReporter.forget(key); }
+        continue;
+      }
+      const pending = [span];
+      this.focusQueues.set(key, pending);
+      const invocation = controlInvocation(data, terminal.address, "focus");
+      cx.spawn(async () => {
+        try {
+          while (pending.length && !this.closed) {
+            const next = pending.shift();
+            const result = await exec(invocation.command, [...invocation.args, JSON.stringify(next)], { timeout: 6000 });
+            if (result.code !== 0 || !JSON.parse(result.stdout)?.ok) { this.focusReporter.forget(key); break; }
+          }
+        } catch {
+          this.focusReporter.forget(key);
+          // A later live render can establish a fresh span. Never replay failed delivery.
+        } finally {
+          if (pending.length) this.focusReporter.forget(key);
+          this.focusQueues.delete(key);
+        }
+      });
+    }
+    for (const key of this.focusReporter.records.keys()) {
+      if (!live.has(key)) this.focusReporter.forget(key);
+    }
+  }
+
   change(data, address, action, cx) {
-    if (this.changing || !metricControl(data, action)?.enabled) return;
+    if (checking() || this.closed || this.changing || !metricControl(data, action)?.enabled) return;
     this.changing = true;
     cx.notify();
     const invocation = controlInvocation(data, address, action);
@@ -64,6 +116,8 @@ export default class WorkspaceStatus extends View {
   }
 
   async close() {
+    this.closed = true;
+    if (checking()) return;
     await Promise.allSettled([...this.hosted].map(async ([address, owner]) => {
       const result = await exec("hc", ["get", address]);
       if (result.code === 0 && JSON.parse(result.stdout).labels?.["pi-adam.footer-host"] === owner) {
@@ -79,6 +133,7 @@ export default class WorkspaceStatus extends View {
     const needs = list.filter(a => a.status === "blocked").length;
     const all = terminals();
     this.announce(all, cx);
+    this.reportFocus(all, cx);
     const focus = focused();
     const address = focus?.shown || focus?.terminal;
     const data = focusedMetrics(focus, all);
@@ -97,7 +152,7 @@ export default class WorkspaceStatus extends View {
         .when(needs > 0, row => row.child(div().text_color(t.blocked).child(`· ${needs} needs you`)))))
       .child(div().flex_1())
       .when(Boolean(data), el => el.child(h_flex().id("pi-metrics").min_w(0).gap(10).items_center()
-        .tooltip(parts.map(part => part.text).join(" · "))
+        .tooltip(footerTooltip(data))
         .children(visibleMetricParts(parts, this.width).map(part => this.metric(part, data, address, t)))))
       .when(!data, el => el.child(div().id("palette").text_color(t.dim).on_click(() => run("app.palette")).child(`${window()?.platform === "macos" ? "⌘" : "Ctrl"} Shift P  commands`)));
   }

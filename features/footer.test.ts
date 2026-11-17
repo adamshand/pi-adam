@@ -194,7 +194,12 @@ test("Herdr uses a zero-line Pi footer and publishes refreshed session metrics",
 			return { code: 0, stdout: "" };
 		},
 	});
-	registerFooterFeature(pi, { HC_TERMINAL_ID: "t7" });
+	let subscription = { focusSpans: false, focusEpoch: 0 };
+	let refreshTracking: (() => void) | undefined;
+	registerFooterFeature(pi, { HC_TERMINAL_ID: "t7" }, {
+		focus() {}, focusSubscription: () => subscription,
+		onFocusRequest: listener => { refreshTracking = listener; },
+	});
 	const emit = async (name: string, event: TestEvent = { type: name }) => {
 		for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
 	};
@@ -211,6 +216,16 @@ test("Herdr uses a zero-line Pi footer and publishes refreshed session metrics",
 	assert.deepEqual(JSON.parse(labels[HERDR_FOOTER_LABEL]).git, { added: 142, removed: 38, ahead: 2, behind: 3 });
 	const endpoint = JSON.parse(labels[HERDR_FOOTER_LABEL]).controls;
 	assert.equal(endpoint.idle, true);
+	assert.equal(endpoint.focusSpans, false);
+	subscription = { focusSpans: true, focusEpoch: 1 };
+	refreshTracking!();
+	await new Promise<void>(resolve => setImmediate(resolve));
+	assert.equal(JSON.parse(labels[HERDR_FOOTER_LABEL]).controls.focusSpans, true);
+	assert.equal(JSON.parse(labels[HERDR_FOOTER_LABEL]).controls.focusEpoch, 1);
+	subscription = { focusSpans: false, focusEpoch: 2 };
+	refreshTracking!();
+	await new Promise<void>(resolve => setImmediate(resolve));
+	assert.equal(JSON.parse(labels[HERDR_FOOTER_LABEL]).controls.focusSpans, false);
 	assert.deepEqual(await sendFooterControl(endpoint, "thinking"), { ok: true });
 	assert.equal(JSON.parse(labels[HERDR_FOOTER_LABEL]).thinking, "high");
 	gitAdded = 200;

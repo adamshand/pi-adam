@@ -7,7 +7,11 @@ fallback while the window is active. Local repositories also use Herdr's native
 `watchFolder` on their actual Git directory and common directory (both are needed
 for linked worktrees). No working-tree watcher or new repeating timer is added.
 Watchers are shared per metadata directory, including multiple agents in one repo.
-They live for this mod instance; Herdr cancels the tasks on mod reload/removal.
+Pending watch handles are cancelled when the last local agent using their
+metadata directory leaves, including when panes change working directory. Shared
+common-directory watches remain while another linked worktree needs them. Close
+cancels all pending handles; generation guards discard late discovery and cancelled
+loops without touching replacement watches. Herdr also cancels tasks on removal.
 
 Index, HEAD, refs, packed-refs, config and shallow-state events invalidate the
 corresponding cached rows. Bursts coalesce for 400ms; object/reflog/lock-file noise
@@ -28,6 +32,12 @@ herdr-app check ~/.config/herdr-app/mods/adam-agents
 herdr-app status
 herdr-app shot /tmp/herdr-agents-git.png
 ```
+
+Requires herdr-app 0.1.16+ for `checking()` and cancellable watch handles. Native
+checks initialize/render the sidebar without Git helpers, timers, watches or
+persistent writes. `main.test.js` covers watch lifetime/races and damaged saved
+state; the shared check-mode regression is in `../status/checking.test.js`.
+See [`../../RELEASE-REVIEWS.md`](../../RELEASE-REVIEWS.md) for the review baseline.
 
 `git-events.test.js` covers metadata filtering, linked-worktree paths, shared event
 bursts, no idle scheduling, and invalidations arriving during a query. Native checks

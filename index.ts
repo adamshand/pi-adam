@@ -12,21 +12,25 @@ import { registerHerdrSessionNameFeature } from "./features/herdr-session-name.t
 import { registerHerdrTodosFeature } from "./features/herdr-todos.ts";
 import { registerMruFeature } from "./features/mru.ts";
 import { registerSessionSearchFeature } from "./features/session-search.ts";
+import { registerProjectNoteFeature } from "./features/project-note.ts";
 import { registerSaveImageFeature } from "./features/save-image.ts";
 import { registerTodosFeature } from "./features/todos.ts";
 import { registerTimersFeature } from "./features/timers.ts";
 import { registerToolCollapseFeature } from "./features/tool-collapse.ts";
 import { registerTurnStampFeature } from "./features/turn-stamp.ts";
+import { registerTimeTrackingFeature } from "./features/time-tracking.ts";
 
 export default function piAdam(pi: ExtensionAPI): void {
 	registerAgentBrowserFeature(pi);
 	registerCodexImageFeature(pi);
 	registerSaveImageFeature(pi);
 	registerSessionSearchFeature(pi);
+	registerProjectNoteFeature(pi);
 	registerCompactionFeature(pi);
 	registerStagedCommandsFeature(pi);
 	registerEnvFeature(pi);
-	registerFooterFeature(pi);
+	const tracking = registerTimeTrackingFeature(pi);
+	registerFooterFeature(pi, process.env, tracking);
 	registerHerdrGitMetadataFeature(pi);
 	registerHerdrSessionNameFeature(pi);
 	registerHerdrRecoveryFeature(pi);
@@ -34,7 +38,7 @@ export default function piAdam(pi: ExtensionAPI): void {
 	registerHerdrTodosFeature(pi);
 	registerHerdrAppTodosFeature(pi);
 	registerMruFeature(pi);
-	registerTurnStampFeature(pi);
+	registerTurnStampFeature(pi, Date.now, tracking);
 	registerTimersFeature(pi);
 	registerToolCollapseFeature(pi);
 }

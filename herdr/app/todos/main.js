@@ -2,7 +2,7 @@
 // guessed "latest" session or the terminal's mutable shell working directory.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { focused, terminals, layout, theme, readTextFile, watchFolder, window, nextCommand, run, exec, props, spaces } from "herdr";
+import { focused, terminals, layout, theme, readTextFile, watchFolder, window, nextCommand, run, exec, props, spaces, checking } from "herdr";
 import { resolveSession, TodoFeed, checklistProgress } from "./model.js";
 import { IdeasFeed, resolveIdeasContext } from "./ideas-model.js";
 import { ideasView } from "./ideas-view.js";
@@ -34,7 +34,8 @@ export default class Todos extends View {
       if (result.code !== 0) throw new Error("Ideas reader did not complete");
       return result.stdout;
     });
-    this.expanded = new Set(); this.showDone = false; this.watching = new Set();
+    this.expanded = new Set(); this.showDone = false; this.watching = new Map(); this.closed = false;
+    if (checking()) return;
     // Local watches are immediate; polling recovers from missing folders and
     // refreshes remote plans, only while this panel is actually visible.
     cx.timer.every(1500, cx => this.refresh(cx));
@@ -56,6 +57,7 @@ export default class Todos extends View {
     if (this.feed.select(context)) { this.expanded.clear(); this.showDone = false; }
     const project = resolveIdeasContext(focused(), terminals(), spaces(), this.config);
     if (this.ideas.select(project)) this.ideaExpanded.clear();
+    this.pruneWatches();
   }
 
   hide() { run("layout.hide", { id: "panel" }); }
@@ -74,6 +76,7 @@ export default class Todos extends View {
   }
 
   refresh(cx, force = false) {
+    if (checking() || this.closed) return;
     this.sync();
     if (this.view === "ideas") {
       if (!visible() || this.ideas.context?.message || this.ideas.loading) return;
@@ -94,20 +97,39 @@ export default class Todos extends View {
   }
 
   watch(context, cx) {
+    if (checking() || this.closed || context.on || !visible() || this.view !== "todos" || context.key !== this.feed.context?.key) return;
     const path = context.session.todo_path;
     const root = path.slice(0, Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")));
     if (this.watching.has(root)) return;
-    this.watching.add(root);
+    const watch = {};
+    this.watching.set(root, watch);
     cx.spawn(async cx => {
       try {
-        while (this.feed.context?.session?.todo_path.startsWith(root + "/") || this.feed.context?.session?.todo_path.startsWith(root + "\\")) {
-          await watchFolder(root);
-          const current = this.feed.context?.session?.todo_path;
-          if (this.view === "todos" && (current?.startsWith(root + "/") || current?.startsWith(root + "\\"))) this.refresh(cx, true);
+        while (this.watching.get(root) === watch) {
+          watch.pending = watchFolder(root);
+          await watch.pending;
+          if (this.watching.get(root) !== watch) break;
+          this.pruneWatches();
+          if (this.watching.get(root) === watch) this.refresh(cx, true);
         }
       } catch { /* The visible-only fallback retries missing/unwatchable directories. */ }
-      finally { this.watching.delete(root); }
+      finally { if (this.watching.get(root) === watch) this.watching.delete(root); }
     });
+  }
+
+  pruneWatches() {
+    const path = !this.closed && this.view === "todos" && visible() && !this.feed.context?.on ? this.feed.context?.session?.todo_path : null;
+    const root = path?.slice(0, Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")));
+    for (const [folder, watch] of this.watching) {
+      if (folder === root) continue;
+      this.watching.delete(folder);
+      watch.pending?.cancel();
+    }
+  }
+
+  close() {
+    this.closed = true;
+    this.pruneWatches();
   }
 
   toggle(id, cx) {

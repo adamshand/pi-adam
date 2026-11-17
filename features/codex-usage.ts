@@ -21,6 +21,11 @@ const CodexUsageResponseSchema = Type.Object({
 
 const ResetCreditsResponseSchema = Type.Object({
 	available_count: Type.Optional(Type.Number()),
+	credits: Type.Optional(Type.Union([Type.Array(Type.Unknown()), Type.Null()])),
+});
+const ResetCreditSchema = Type.Object({
+	status: Type.Optional(Type.String()),
+	expires_at: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 });
 
 const JwtClaimsSchema = Type.Object({
@@ -38,6 +43,9 @@ export type CodexUsageSnapshot = {
 	fiveHourResetAt?: number;
 	weeklyResetAt?: number;
 	availableResets?: number;
+	/** Available-credit expiries in epoch seconds; null means explicitly non-expiring.
+	 * May be partial; the backend's count remains authoritative. No IDs or profile data. */
+	resetExpirations?: (number | null)[];
 };
 
 export type CodexUsageStatusName = "idle" | "loading" | "ready" | "stale" | "error" | "ineligible";
@@ -175,6 +183,28 @@ export function snapshotFromRateLimit(rateLimit: RateLimit | undefined): CodexUs
 	};
 }
 
+/** GET wham/rate-limit-reset-credits uses RFC3339 expires_at, not the app-server's camelCase seconds.
+ * Contract: https://github.com/openai/codex/blob/main/codex-rs/backend-client/src/client/rate_limit_resets_tests.rs */
+export function snapshotFromResetCredits(response: Static<typeof ResetCreditsResponseSchema>): Pick<CodexUsageSnapshot, "availableResets" | "resetExpirations"> {
+	const resetExpirations: (number | null)[] = [];
+	for (const row of response.credits ?? []) {
+		try {
+			const credit = Parse(ResetCreditSchema, row);
+			if (credit.status !== "available") continue;
+			if (credit.expires_at === null) resetExpirations.push(null);
+			else if (credit.expires_at !== undefined) {
+				const expiry = Date.parse(credit.expires_at) / 1000;
+				if (Number.isFinite(expiry) && expiry >= 0) resetExpirations.push(expiry);
+			}
+		} catch { /* Bad detail rows must not discard the authoritative count. */ }
+	}
+	resetExpirations.sort((a, b) => (a ?? Infinity) - (b ?? Infinity));
+	return {
+		availableResets: response.available_count,
+		resetExpirations: response.credits == null ? undefined : resetExpirations.slice(0, 64),
+	};
+}
+
 async function loadSnapshot(ctx: ExtensionContext, signal: AbortSignal): Promise<CodexUsageSnapshot> {
 	const accessToken = await waitForSignal(ctx.modelRegistry.getApiKeyForProvider("openai-codex"), signal);
 	if (!accessToken) throw new Error('No Pi auth found for provider "openai-codex". Use /login first.');
@@ -187,7 +217,7 @@ async function loadSnapshot(ctx: ExtensionContext, signal: AbortSignal): Promise
 
 	return {
 		...snapshotFromRateLimit(usageResult.value.rate_limit),
-		availableResets: creditsResult.status === "fulfilled" ? creditsResult.value.available_count : undefined,
+		...(creditsResult.status === "fulfilled" ? snapshotFromResetCredits(creditsResult.value) : { availableResets: undefined }),
 	};
 }
 

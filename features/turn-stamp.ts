@@ -1,11 +1,14 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { TrackingStamp } from "./time-tracking.ts";
+import { formatTrackedTime } from "./time-tracking-store.ts";
 
 export const TURN_STAMP_ENTRY_TYPE = "pi-adam-turn-stamp";
 
 export type TurnStampData = {
 	version: 1;
 	completedAt: number;
+	tracking?: TrackingStamp;
 };
 
 const LOCAL_DATE_TIME = new Intl.DateTimeFormat("en-GB", {
@@ -39,6 +42,7 @@ export function formatTurnStamp(completedAt: number): string | undefined {
 export function registerTurnStampFeature(
 	pi: ExtensionAPI,
 	now: () => number = Date.now,
+	tracking: (at: number) => TrackingStamp | undefined = () => undefined,
 ): void {
 	let tuiSessionActive = false;
 	let hasPendingAssistantTurn = false;
@@ -46,8 +50,10 @@ export function registerTurnStampFeature(
 	pi.registerEntryRenderer<TurnStampData>(TURN_STAMP_ENTRY_TYPE, (entry, _options, theme) => {
 		const completedAt = entry.data?.completedAt;
 		if (completedAt === undefined) return undefined;
-		const label = formatTurnStamp(completedAt);
-		if (!label) return undefined;
+		const date = formatTurnStamp(completedAt);
+		if (!date) return undefined;
+		const saved = entry.data?.tracking;
+		const label = saved ? `${date} (${saved.status} ${formatTrackedTime(saved.milliseconds)}${saved.idleMilliseconds === undefined ? "" : `; idle ${formatTrackedTime(saved.idleMilliseconds)}; focus unknown ${formatTrackedTime(saved.unknownMilliseconds ?? 0)}`})` : date;
 		return {
 			render(width: number): string[] {
 				if (width < 1) return [];
@@ -75,10 +81,10 @@ export function registerTurnStampFeature(
 		hasPendingAssistantTurn = false;
 		const completedAt = now();
 		if (!formatTurnStamp(completedAt)) return;
-		pi.appendEntry<TurnStampData>(TURN_STAMP_ENTRY_TYPE, {
-			version: 1,
-			completedAt,
-		});
+		const snapshot = tracking(completedAt);
+		const data: TurnStampData = { version: 1, completedAt };
+		if (snapshot) data.tracking = snapshot;
+		pi.appendEntry<TurnStampData>(TURN_STAMP_ENTRY_TYPE, data);
 	});
 
 	pi.on("session_shutdown", () => {

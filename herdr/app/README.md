@@ -1,12 +1,42 @@
 # Native Herdr Mac app integration
 
+Current source targets **herdr-app 0.1.16+** (`checking()` and cancellable folder
+watches). See [`../RELEASE-REVIEWS.md`](../RELEASE-REVIEWS.md) for the app/core
+release review baseline, adopted fixes, retained naming/recovery behavior, and
+the source-only deployment boundary. Our custom mods are not updated by Herdr.
+
+## Footer hover and background refresh
+
+Notes and Status changes were deployed to the installed personal mods on
+2026-11-16 (main/model files only; no layout or other mod changes). Backup:
+`~/.config/herdr-app/backups/notes-footer-live.X5Ycrz/`. Both installed native
+checks pass and app status reports no errors. Restarting Herdr alone does not
+copy repo source into installed mods; future UI changes need explicit deployment.
+Keyboard behavior and hover content still require a human live check.
+
+The personal Status mod's hover gives supplemental quota detail rather than
+repeating visible metrics: 5-hour/weekly reset date/time in local time with a
+relative duration, plus banked reset expiry details where the API supplies them.
+Individual quota/reset metrics have their own corresponding hover. Missing and
+partial expiry detail is explicit; count is authoritative, null means an explicitly
+non-expiring credit. These fields use the existing credits GET request; no new
+poller, redemption action, credit ID or profile metadata is added.
+
+The intermittent right-side widening had a deterministic cause: every periodic
+quota refresh appended `…` to each populated quota label, then removed it on
+completion. Known values now keep identical text/layout during loading; the
+refresh state moves to hover. Initial loading and stale/error indicators remain.
+This was covered by a ready/loading/ready regression, not a live visual reproduction.
+
 ## Source and installed files
 
 - `features/herdr-app-todos.ts`: Pi lifecycle bridge, registered in `index.ts`.
 - `todos/`: native GPUI Todos/Ideas mod, pure read models, icons, and model tests.
 - `ideas/read-ideas.js`: one-shot Node adapter for safe Work reads; uses the existing Work client.
-- `tabs/`: personal clone of Herdr 0.1.7's tabs mod, with a Tasks button added.
-  It keeps Files/Changes preferences and the per-space panel selection behavior.
+- `tabs/`: personal clone of Herdr 0.1.7's tabs mod, with Tasks/Notes buttons
+  and selected 0.1.15/0.1.16 fixes: active-tab reveal, smooth-scroll throttling,
+  live-title fallback and resilient saved state. It keeps Files/Changes preferences
+  and the per-space panel selection behavior.
 - Installed as `~/.config/herdr-app/mods/adam-todos` and `mods/adam-tabs`.
 - Personal layout `~/.config/herdr-app/layouts/adam.json` points its tab bar at
   `adam-tabs` and includes a `todos` block in the existing `panel-body` stack.
@@ -211,7 +241,7 @@ temporary preview publication was removed after testing.
 Deploy/update after cloning `workspace-status` as `adam-status`:
 
 ```sh
-cp herdr/app/status/{main.js,model.js,mod.json} ~/.config/herdr-app/mods/adam-status/
+cp herdr/app/status/{main.js,model.js,focus.js,mod.json} ~/.config/herdr-app/mods/adam-status/
 herdr-app check ~/.config/herdr-app/mods/adam-status
 herdr-app status
 herdr-app shot /tmp/herdr-pi-footer.png
@@ -245,3 +275,15 @@ Both installed mods must also pass `herdr-app check`. Live screenshots verified
 the Todos button and this session's real Todo, progress bar, wrapped title,
 progress text, and checklists. Remote reads and session replacement have unit
 coverage; they were not exercised by switching the person's running sessions.
+
+## Idle focus coverage
+
+The updated `adam-status` reports local terminal focus using `focused().shown || focused().terminal` plus `window().active`. It requires the updated Pi footer endpoint (`controls.focusSpans`) and `status/focus.js` alongside the installed mod. The helper remains at the repository path advertised by Pi. Deploy the status files using the command above, check the mod, then reload Pi. This implementation has not been installed into live mods by the implementation task.
+
+Only tracking sessions subscribe. Focus transitions or a changed Pi checkpoint epoch close the previous observation span; unrelated renders never launch a focus helper. Tracking/activity changes publish the descriptor directly, while incoming coverage never publishes another checkpoint. Unsubscribing can flush one final closed span. A bounded per-runtime queue delivers it over the existing private Unix socket, with runtime/session identity checks, strict schema validation, ordered sequence numbers, a 5-second maximum delivery age and 6-second helper deadline. At most 32 spans queue behind an in-flight request; overflow or failure leaves a coverage gap. There are no idle timers and no focus extrapolation. Unconfirmed tails remain unknown even when the last observation said unfocused. Confirmed focus spans are intersected with Pi's waiting/working transitions and billable intervals, stored at millisecond precision, and coalesced when adjacent classifications match.
+
+A dead/removed provider never extends its last report. Providers carry a start timestamp and unique identity, ordered as a generation tuple. A newer generation takes over after the last covered end, with no extrapolation through the disconnected gap. A single high-water generation rejects retired messages without unbounded history. Use one app window and one status-mod copy for these sessions; simultaneous clients are unsupported. Remote panes are excluded. Mod hot reload and app restart establish a new baseline without requiring Pi reload. A backwards system-clock change may delay handoff until timestamps catch up. Sleep is not independently detected. Render timestamps approximate native focus transitions; this is not an OS-level attention tracker.
+
+Standard Pi extension prompt events are supported; custom screens can be loaders and are excluded, as are arbitrary tool/terminal waits. A turn stamp contains only coverage confirmed when that stamp was written, so later delivery can increase `/track status` without changing the earlier stamp. Clear confirmation ignores telemetry/checkpoint revisions while retaining semantic revision and session/owner checks, and archives the latest delivered coverage atomically. Empty coverage intersections never write the ledger. Old ledgers and stamps remain readable; unmeasured time is shown as unknown rather than idle or active.
+
+Before deployment, run `pnpm check` and `herdr-app check "$PWD/herdr/app/status"` outside a restricted sandbox, then review in a separate test Pi session with a temporary ledger. Verify tab changes, terminal replacements, app activation, mod removal/restart, and pause/clear/reload. No live focus or installed-layout changes were made during implementation.
