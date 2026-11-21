@@ -6,6 +6,7 @@ import { isCodexModel, registerCodexFastFeature } from "./codex-fast.ts";
 import { isCodexImageModel } from "./codex-image.ts";
 import { registerCodexUsageFeature, type CodexUsageSnapshot } from "./codex-usage.ts";
 import { isClaudeCodeModel, registerClaudeUsageFeature } from "./claude-usage.ts";
+import { isCopilotModel, registerCopilotUsageFeature, type CopilotUsageSnapshot } from "./copilot-usage.ts";
 import { centeredFooter, readFooterGitStats, type FooterGitStats } from "./footer-git.ts";
 import { watchFooterGit } from "./footer-git-watch.ts";
 import { HerdrFooterBridge } from "./herdr-app-footer.ts";
@@ -24,7 +25,7 @@ type FooterPalette = {
 
 type UsageView = {
 	status: string;
-	snapshot?: CodexUsageSnapshot;
+	snapshot?: CodexUsageSnapshot & CopilotUsageSnapshot;
 };
 
 type FooterMetrics = {
@@ -159,6 +160,7 @@ export function registerFooterFeature(
 	const codexFast = registerCodexFastFeature(pi, requestRender);
 	const codexUsage = registerCodexUsageFeature(pi, requestRender);
 	const claudeUsage = registerClaudeUsageFeature(pi, requestRender);
+	const copilotUsage = registerCopilotUsageFeature(pi, requestRender);
 	/** Subscription usage for the active model's provider, if it reports any. */
 	const activeUsage = (ctx: ExtensionContext): UsageView | undefined => {
 		if (isCodexModel(ctx.model)) {
@@ -167,6 +169,10 @@ export function registerFooterFeature(
 		}
 		if (isClaudeCodeModel(ctx.model)) {
 			const usage = claudeUsage.getState();
+			return { status: usage.status, snapshot: usage.snapshot };
+		}
+		if (isCopilotModel(ctx.model)) {
+			const usage = copilotUsage.getState();
 			return { status: usage.status, snapshot: usage.snapshot };
 		}
 		return undefined;
@@ -190,6 +196,7 @@ export function registerFooterFeature(
 			const fast = codexFast.getState();
 			const usage = codexUsage.getState();
 			const claude = claudeUsage.getState();
+			const copilot = copilotUsage.getState();
 			const context = metrics.contextUsage;
 			const contextLimit = context?.contextWindow ?? ctx.model?.contextWindow ?? 0;
 			const contextTokens = context?.tokens ?? 0;
@@ -202,6 +209,7 @@ export function registerFooterFeature(
 				`Usage: ${usage.status} · last attempt ${formatTimestamp(usage.lastAttemptAt)} · last success ${formatTimestamp(usage.lastSuccessAt)}`,
 				`Usage error: ${usage.lastError ?? "none"}`,
 				`Claude usage: ${claude.status} · last update ${formatTimestamp(claude.lastSuccessAt)}`,
+				`Copilot usage: ${copilot.status} · last success ${formatTimestamp(copilot.lastSuccessAt)}${copilot.lastError ? ` · ${copilot.lastError}` : ""}`,
 				`Image tool: ${isCodexImageModel(ctx.model) ? "eligible" : "ineligible"}`,
 				`Footer cost: $${metrics.cost.toFixed(2)} · refreshed ${formatTimestamp(metrics.costUpdatedAt)}`,
 				`Context: ${contextTokens}/${contextLimit || "?"} (${contextPercent}) · refreshed ${formatTimestamp(metrics.contextUpdatedAt)}`,
@@ -351,6 +359,9 @@ export function registerFooterFeature(
 								: "",
 							usage.snapshot.weeklyUsed !== undefined
 								? `${theme.fg("dim", "wk ")}${colorizeCodexUsage(usage.snapshot.weeklyUsed)}`
+								: "",
+							usage.snapshot.monthUsed !== undefined
+								? `${theme.fg("dim", "mo ")}${colorizeCodexUsage(usage.snapshot.monthUsed)}`
 								: "",
 							usage.snapshot.availableResets !== undefined
 								? `${theme.fg("dim", "↺")}${colorize(palette.primary, String(usage.snapshot.availableResets))}`

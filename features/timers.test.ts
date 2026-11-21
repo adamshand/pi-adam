@@ -5,12 +5,12 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createTestExtensionApi, createTestExtensionContext } from "./test-extension.ts";
 import { formatTimerRelative, formatTimerTime, registerTimersFeature, resolveTimerDeadline } from "./timers.ts";
 
-type Params = { action: "set"; after: string; message: string } | { action: "list" } | { action: "cancel"; id: string };
+type Params = { action: "set" | "list" | "cancel"; after?: string; at?: string; message?: string; id?: string };
 type SavedTimer = { id: string; at: number; message: string };
 type Entry = { type: "custom"; customType: string; data: { timers: SavedTimer[] } };
 type TimerDetails = { now: string; timers: { id: string; at: string; message: string }[]; id?: string; at?: string };
 type Result = { content: { type: string; text: string }[]; details: TimerDetails; structuredContent: TimerDetails };
-type Tool = { execute(id: string, params: Params, signal: undefined, update: undefined, ctx: ExtensionContext): Promise<Result> };
+type Tool = { parameters: { type?: string; anyOf?: never; oneOf?: never; allOf?: never }; execute(id: string, params: Params, signal: undefined, update: undefined, ctx: ExtensionContext): Promise<Result> };
 
 function harness(entries: Entry[] = [], session = "one") {
 	const handlers = new Map<string, (event: { reason: string }, ctx: ExtensionContext) => void>();
@@ -44,7 +44,7 @@ function harness(entries: Entry[] = [], session = "one") {
 		await command.handler(args, ctx);
 	};
 	start();
-	return { entries, messages, options, notifications, call, runCommand, start, stop };
+	return { entries, messages, options, notifications, call, runCommand, start, stop, tool: () => tool };
 }
 
 const NOW = Date.parse("2026-10-03T10:00:00Z");
@@ -59,6 +59,18 @@ test("resolves durations, UTC and NZDT instants without guessing a date", () => 
 	for (const at of ["11:13 UTC", "2026-10-03T11:13:00", "2026-02-30T11:00:00Z", "2026-10-03T24:00:00Z", "2026-10-03T09:00:00Z"]) {
 		assert.throws(() => resolveTimerDeadline(undefined, at, NOW));
 	}
+});
+
+test("tool schema is one flat object because Copilot's Gemini models 400 on a top-level anyOf", async () => {
+	const h = harness();
+	const parameters = h.tool()?.parameters;
+	assert.equal(parameters?.type, "object");
+	for (const key of ["anyOf", "oneOf", "allOf"]) assert.equal(key in (parameters ?? {}), false);
+	await assert.rejects(h.call({ action: "set", after: "1m" }), /instructions/);
+	await assert.rejects(h.call({ action: "set", message: "x" }), /exactly one of after or at/);
+	await assert.rejects(h.call({ action: "set", after: "1m", at: "2099-01-01T00:00:00Z", message: "x" }), /exactly one/);
+	await assert.rejects(h.call({ action: "cancel" }), /id/);
+	h.stop();
 });
 
 test("formats local dates across midnight and daylight saving using the machine timezone", () => {

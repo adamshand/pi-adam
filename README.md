@@ -116,6 +116,13 @@ Use `/timers` to inspect pending timers, `/timers cancel <id>` to cancel one, or
 
 Pi must remain running for on-time delivery. Timers do not launch Pi or wake a sleeping computer, and print-mode invocations should not be used as background schedulers. No model requests are made while waiting by the timer feature. Pending timers are consumed before queuing a wake-up to avoid duplicate delivery; a process crash during dispatch can lose that wake-up.
 
+## Provider quirks
+
+For errors that only one provider or model returns. To diagnose one, load a throwaway extension with `pi -e` that writes the `before_provider_request` payload to a file, then replay that payload with `curl` or Python so you can see the response body. Remove tools from the replayed payload until the request succeeds.
+
+- **GitHub Copilot + Gemini: bare `400 Bad Request`.** Copilot's Gemini models reject a request if any tool's parameters have a top-level `anyOf`, which is what a top-level `Type.Union` produces. The error doesn't say which tool caused it. Kimi and Claude through Copilot accept it. Keep each tool's input schema a single `Type.Object`. Unions inside a property (`action: Type.Union([...literals])`) are fine. Check per-action requirements in `execute()`. Found 2026-11-21 in `timer`; `timers.test.ts` checks that its schema stays flat.
+- **GitHub Copilot + `gpt-6-sol`: `400 Bad Request`, not yet investigated.** It failed even with no tools and no `anyOf`, when sent to Copilot's `/chat/completions` endpoint. Likely cause: Copilot only serves GPT-6 models through the Responses API, not chat completions. It wasn't investigated because GPT-6 runs through the Codex subscription instead. If it comes up, check which `api` pi's `github-copilot` catalog entry uses for that model (`~/.pi/agent/models-store.json`).
+
 ## Billable-time tracking
 
 Use **`/track`** to start or resume explicit wall-clock tracking for this Pi session. It includes time spent reading, reviewing and testing between turns—not just model execution. Repeating `/track` while running reports the total without starting another interval.

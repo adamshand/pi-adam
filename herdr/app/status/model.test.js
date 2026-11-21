@@ -72,6 +72,20 @@ test("hover details show quota reset times and partial credit expiries instead o
   assert.match(footerTooltip({}, now), /not available/);
 });
 
+test("Copilot monthly usage shows as 'mo' with premium-request hover details", () => {
+  const now = Date.parse("2026-11-22T00:00:00Z"), monthResetAt = Date.parse("2026-12-01T00:00:00Z") / 1000;
+  const data = { ...snapshot, usage: { status: "ready", monthUsed: 8.6, monthResetAt, premiumUsed: 598, premiumEntitlement: 7000 } };
+  assert.ok(focusedMetrics({ terminal: "t1" }, [terminal("t1", data)]));
+  const part = metricParts(data, now).find(p => p.text.startsWith("mo "));
+  assert.equal(part.text, "mo 9%"); assert.equal(part.tone, "accent");
+  assert.match(part.tooltip, /598 of 7,000 premium requests used/);
+  assert.match(part.tooltip, /Monthly Copilot quota resets:.*in 9d 0h/);
+  assert.ok(!metricParts(data, now).some(p => /^(5h|wk) /.test(p.text)));
+  assert.match(footerTooltip(data, now), /premium requests/);
+  assert.doesNotMatch(footerTooltip(data, now), /5-hour/);
+  assert.equal(focusedMetrics({ terminal: "t1" }, [terminal("t1", { ...snapshot, usage: { status: "ready", monthUsed: "bad" } })]), null);
+});
+
 test("new optional reset/expiry fields validate without accepting unsafe label values", () => {
   const valid = { ...snapshot, usage: { status: "ready", fiveHourResetAt: 123, weeklyResetAt: 456, resetExpirations: [789, null] } };
   assert.ok(focusedMetrics({ terminal: "t1" }, [terminal("t1", valid)]));

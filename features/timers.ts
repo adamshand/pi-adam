@@ -13,12 +13,16 @@ const TimerSchema = Type.Object({
 const StateSchema = Type.Object({ timers: Type.Array(TimerSchema) });
 type Timer = Static<typeof TimerSchema>;
 
-const Parameters = Type.Union([
-	Type.Object({ action: Type.Literal("set"), after: Type.String(), message: Type.String() }),
-	Type.Object({ action: Type.Literal("set"), at: Type.String(), message: Type.String() }),
-	Type.Object({ action: Type.Literal("list") }),
-	Type.Object({ action: Type.Literal("cancel"), id: Type.String() }),
-]);
+// Keep the tool's input schema a single flat object. GitHub Copilot's Gemini models reject any request whose
+// tool parameters have a top-level anyOf (a Type.Union) with a bare "400 Bad Request", so per-action
+// requirements are enforced in execute() instead.
+const Parameters = Type.Object({
+	action: Type.Union([Type.Literal("set"), Type.Literal("list"), Type.Literal("cancel")]),
+	after: Type.Optional(Type.String({ description: "set: duration such as 30s, 33m, 2h, 1d (use after or at, not both)" })),
+	at: Type.Optional(Type.String({ description: "set: full ISO timestamp with Z or UTC offset (use after or at, not both)" })),
+	message: Type.Optional(Type.String({ description: "set: instructions for the wake-up" })),
+	id: Type.Optional(Type.String({ description: "cancel: timer id" })),
+});
 
 export function resolveTimerDeadline(after: string | undefined, at: string | undefined, now: number): number {
 	let deadline: number;
@@ -145,9 +149,11 @@ export function registerTimersFeature(pi: ExtensionAPI): void {
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (sessionId !== ctx.sessionManager.getSessionId()) restore(ctx);
 			if (params.action === "set") {
-				if (!params.message.trim()) throw new Error("Provide instructions for the wake-up.");
-				const at = resolveTimerDeadline("after" in params ? params.after : undefined, "at" in params ? params.at : undefined, Date.now());
-				const timer = { id: randomUUID(), at, message: params.message };
+				const message = params.message?.trim() ? params.message : undefined;
+				if (!message) throw new Error("Provide instructions for the wake-up.");
+				if ((params.after === undefined) === (params.at === undefined)) throw new Error("Provide exactly one of after or at.");
+				const at = resolveTimerDeadline(params.after, params.at, Date.now());
+				const timer = { id: randomUUID(), at, message };
 				timers.push(timer);
 				persist();
 				arm();
@@ -158,6 +164,7 @@ export function registerTimersFeature(pi: ExtensionAPI): void {
 				};
 			}
 			if (params.action === "cancel") {
+				if (!params.id) throw new Error("Provide the id of the timer to cancel.");
 				if (!timers.some((timer) => timer.id === params.id)) throw new Error(`No pending timer ${params.id}.`);
 				timers = timers.filter((timer) => timer.id !== params.id);
 				persist();

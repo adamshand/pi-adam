@@ -22,7 +22,8 @@ export function focusedMetrics(focus, terminals) {
       || [git.ahead, git.behind].some(value => value !== undefined && (!finite(value) || !Number.isSafeInteger(value))))) return null;
     const usage = data.usage;
     if (usage !== undefined && (!usage || !["idle", "loading", "ready", "stale", "error", "ineligible"].includes(usage.status)
-      || [usage.fiveHourUsed, usage.weeklyUsed, usage.availableResets, usage.fiveHourResetAt, usage.weeklyResetAt].some(value => value !== undefined && !finite(value))
+      || [usage.fiveHourUsed, usage.weeklyUsed, usage.availableResets, usage.fiveHourResetAt, usage.weeklyResetAt,
+        usage.monthUsed, usage.monthResetAt, usage.premiumUsed, usage.premiumEntitlement, usage.premiumOverage].some(value => value !== undefined && !finite(value))
       || (usage.resetExpirations !== undefined && (!Array.isArray(usage.resetExpirations) || usage.resetExpirations.length > 64
         || usage.resetExpirations.some(value => value !== null && !finite(value)))))) return null;
     const controls = data.controls;
@@ -62,10 +63,19 @@ export function resetCreditTooltip(usage, now = Date.now()) {
   return lines.join("\n");
 }
 
+/** GitHub Copilot: monthly premium-request allowance. */
+function copilotTooltip(usage, now) {
+  const counts = usage.premiumUsed !== undefined && usage.premiumEntitlement
+    ? `${usage.premiumUsed.toLocaleString()} of ${usage.premiumEntitlement.toLocaleString()} premium requests used` : "";
+  return [counts, usage.premiumOverage ? `${usage.premiumOverage.toLocaleString()} over allowance` : "",
+    `Monthly Copilot quota resets: ${resetTime(usage.monthResetAt, now)}`].filter(Boolean).join("\n");
+}
+
 /** Supplemental detail rather than a duplicate of the visible metrics. */
 export function footerTooltip(data, now = Date.now()) {
   const usage = data?.usage;
   if (!usage) return "Quota reset information is not available yet.";
+  if (usage.monthUsed !== undefined || usage.monthResetAt !== undefined) return [copilotTooltip(usage, now), usageHealth(usage)].filter(Boolean).join("\n");
   return [
     `5-hour quota resets: ${resetTime(usage.fiveHourResetAt, now)}`,
     `Weekly quota resets: ${resetTime(usage.weeklyResetAt, now)}`,
@@ -107,8 +117,10 @@ export function metricParts(data, now = Date.now()) {
       if (value !== undefined) parts.push({ text: `${label} ${Math.round(value)}%${health}`, tone: value > 90 ? "blocked" : value > 70 ? "working" : "accent", kind: "usage",
         tooltip: [`${label === "5h" ? "5-hour" : "Weekly"} quota resets: ${resetTime(reset, now)}`, usageHealth(usage)].filter(Boolean).join("\n") });
     }
+    if (usage.monthUsed !== undefined) parts.push({ text: `mo ${Math.round(usage.monthUsed)}%${health}`, tone: usage.monthUsed > 90 ? "blocked" : usage.monthUsed > 70 ? "working" : "accent", kind: "usage",
+      tooltip: [copilotTooltip(usage, now), usageHealth(usage)].filter(Boolean).join("\n") });
     if (usage.availableResets !== undefined) parts.push({ text: `↺${usage.availableResets}`, tone: "muted", kind: "resets", tooltip: resetCreditTooltip(usage, now) });
-    if (usage.fiveHourUsed === undefined && usage.weeklyUsed === undefined && (health || usage.status === "loading")) parts.push({ text: `usage${health || " …"}`, tone: "working", kind: "usage", tooltip: footerTooltip(data, now) });
+    if (usage.fiveHourUsed === undefined && usage.weeklyUsed === undefined && usage.monthUsed === undefined && (health || usage.status === "loading")) parts.push({ text: `usage${health || " …"}`, tone: "working", kind: "usage", tooltip: footerTooltip(data, now) });
   }
   return parts;
 }
