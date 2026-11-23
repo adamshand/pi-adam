@@ -5,21 +5,35 @@ import { Check } from "typebox/value";
 
 const ENTRY_TYPE = "pi-adam-timers";
 const MAX_TIMEOUT = 2_147_483_647;
+const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] as const;
+const RepeatSchema = Type.Object({
+	every: Type.Union([Type.Literal("daily"), Type.Literal("weekly")]),
+	/** Local wall-clock time, HH:MM (24-hour). */
+	time: Type.String(),
+	/** Weekly only: 0 = Sunday … 6 = Saturday. */
+	day: Type.Optional(Type.Number()),
+});
+export type Repeat = Static<typeof RepeatSchema>;
 const TimerSchema = Type.Object({
 	id: Type.String(),
 	at: Type.Number(),
 	message: Type.String(),
+	repeat: Type.Optional(RepeatSchema),
 });
 const StateSchema = Type.Object({ timers: Type.Array(TimerSchema) });
 type Timer = Static<typeof TimerSchema>;
+type ListedTimer = { id: string; at: string; message: string; repeat?: string };
 
 // Keep the tool's input schema a single flat object. GitHub Copilot's Gemini models reject any request whose
 // tool parameters have a top-level anyOf (a Type.Union) with a bare "400 Bad Request", so per-action
 // requirements are enforced in execute() instead.
 const Parameters = Type.Object({
 	action: Type.Union([Type.Literal("set"), Type.Literal("list"), Type.Literal("cancel")]),
-	after: Type.Optional(Type.String({ description: "set: duration such as 30s, 33m, 2h, 1d (use after or at, not both)" })),
-	at: Type.Optional(Type.String({ description: "set: full ISO timestamp with Z or UTC offset (use after or at, not both)" })),
+	after: Type.Optional(Type.String({ description: "set: duration such as 30s, 33m, 2h, 1d (use exactly one of after, at or every)" })),
+	at: Type.Optional(Type.String({ description: "set: full ISO timestamp with Z or UTC offset (use exactly one of after, at or every)" })),
+	every: Type.Optional(Type.Union([Type.Literal("daily"), Type.Literal("weekly")], { description: "set: recurring timer; requires time, and day when weekly" })),
+	time: Type.Optional(Type.String({ description: "set with every: local 24-hour time HH:MM, e.g. 09:00" })),
+	day: Type.Optional(Type.String({ description: "set with every=weekly: weekday name, e.g. monday" })),
 	message: Type.Optional(Type.String({ description: "set: instructions for the wake-up" })),
 	id: Type.Optional(Type.String({ description: "cancel: timer id" })),
 });
@@ -53,6 +67,39 @@ export function resolveTimerDeadline(after: string | undefined, at: string | und
 	return deadline;
 }
 
+/** Validate a recurring rule from tool arguments. */
+export function resolveRepeat(every: "daily" | "weekly", time: string | undefined, day: string | undefined): Repeat {
+	const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(time?.trim() ?? "");
+	if (!match) throw new Error("Use a local 24-hour time such as 09:00 or 17:30.");
+	const normalized = `${match[1].padStart(2, "0")}:${match[2]}`;
+	if (every === "daily") {
+		if (day !== undefined) throw new Error("day only applies to weekly timers.");
+		return { every, time: normalized };
+	}
+	const name = day?.trim().toLowerCase() ?? "";
+	const index = WEEKDAYS.findIndex((weekday) => name.length >= 3 && weekday.startsWith(name));
+	if (index < 0) throw new Error("Weekly timers need a day such as monday.");
+	return { every, time: normalized, day: index };
+}
+
+/** Next local occurrence strictly after `after`. Uses local calendar arithmetic so DST shifts keep the wall-clock time. */
+export function nextOccurrence(repeat: Repeat, after: number): number {
+	const [hours, minutes] = repeat.time.split(":").map(Number);
+	const candidate = new Date(after);
+	candidate.setHours(hours, minutes, 0, 0);
+	if (repeat.every === "weekly") candidate.setDate(candidate.getDate() + ((repeat.day ?? 0) - candidate.getDay() + 7) % 7);
+	while (candidate.getTime() <= after) candidate.setDate(candidate.getDate() + (repeat.every === "weekly" ? 7 : 1));
+	return candidate.getTime();
+}
+
+export function describeRepeat(repeat: Repeat): string {
+	const [hours, minutes] = repeat.time.split(":").map(Number);
+	const clock = `${hours % 12 || 12}:${String(minutes).padStart(2, "0")} ${hours < 12 ? "am" : "pm"}`;
+	if (repeat.every === "daily") return `daily at ${clock}`;
+	const day = WEEKDAYS[repeat.day ?? 0];
+	return `every ${day[0].toUpperCase()}${day.slice(1)} at ${clock}`;
+}
+
 export function formatTimerTime(at: number): string {
 	return new Intl.DateTimeFormat("en-NZ", {
 		weekday: "short", day: "numeric", month: "short", year: "numeric",
@@ -72,7 +119,7 @@ export function formatTimerRelative(at: number, now: number): string {
 
 function formatPendingTimers(timers: Timer[], now: number): string {
 	return timers.length === 0 ? "No pending timers." : timers.map((timer) =>
-		`${timer.id} · ${formatTimerTime(timer.at)} · ${formatTimerRelative(timer.at, now)} · ${timer.message}`).join("\n");
+		`${timer.id} · ${formatTimerTime(timer.at)} · ${formatTimerRelative(timer.at, now)}${timer.repeat ? ` · repeats ${describeRepeat(timer.repeat)}` : ""} · ${timer.message}`).join("\n");
 }
 
 export function registerTimersFeature(pi: ExtensionAPI): void {
@@ -89,7 +136,11 @@ export function registerTimersFeature(pi: ExtensionAPI): void {
 	const persist = () => pi.appendEntry(ENTRY_TYPE, { timers: timers.map((timer) => ({ ...timer })) });
 	const listing = () => ({
 		now: new Date().toISOString(),
-		timers: timers.map((timer) => ({ ...timer, at: new Date(timer.at).toISOString() })),
+		timers: timers.map((timer) => {
+			const listed: ListedTimer = { id: timer.id, at: new Date(timer.at).toISOString(), message: timer.message };
+			if (timer.repeat) listed.repeat = describeRepeat(timer.repeat);
+			return listed;
+		}),
 	});
 	const arm = () => {
 		clear();
@@ -100,7 +151,11 @@ export function registerTimersFeature(pi: ExtensionAPI): void {
 			if (generation !== armedGeneration || !sessionId) return;
 			const now = Date.now();
 			const due = timers.filter((timer) => timer.at <= now);
-			timers = timers.filter((timer) => timer.at > now);
+			// Recurring timers fire once however many occurrences were missed (e.g. asleep), then move to the next future one.
+			timers = [
+				...timers.filter((timer) => timer.at > now),
+				...due.flatMap((timer) => timer.repeat ? [{ ...timer, at: nextOccurrence(timer.repeat, now) }] : []),
+			];
 			if (due.length > 0) {
 				// Consume before dispatch so reload/resume cannot enqueue the same wake-up twice.
 				persist();
@@ -108,7 +163,7 @@ export function registerTimersFeature(pi: ExtensionAPI): void {
 					customType: "pi-adam-timer-wakeup",
 					display: true,
 					content: `Timer woke at ${formatTimerTime(now)}:\n${due.map((timer) =>
-						`- ${timer.id}, scheduled for ${formatTimerTime(timer.at)}: ${timer.message}`).join("\n")}`,
+						`- ${timer.id}, scheduled for ${formatTimerTime(timer.at)}${timer.repeat ? ` (repeats ${describeRepeat(timer.repeat)})` : ""}: ${timer.message}`).join("\n")}`,
 					details: { timers: due, firedAt: now },
 				}, { triggerTurn: true, deliverAs: "followUp" });
 			}
@@ -138,11 +193,11 @@ export function registerTimersFeature(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "timer",
 		label: "Timer",
-		description: "Schedule a one-shot agent wake-up without polling. Use after (30s, 33m, 2h, 1d) or at (full ISO timestamp with timezone), plus instructions to resume. Returns immediately; finish your turn to wait. Also list or cancel timers. Pi must remain running; overdue timers fire on session resume. Timers are session-owned across branches.",
+		description: "Schedule an agent wake-up without polling. One-shot: after (30s, 33m, 2h, 1d) or at (full ISO timestamp with timezone). Recurring: every daily|weekly with time (local HH:MM) and, for weekly, day (e.g. monday). Plus instructions to resume. Returns immediately; finish your turn to wait. Also list or cancel timers. Pi must remain running; overdue timers fire once on wake/resume and recurring ones then continue from the next future occurrence. Timers are session-owned across branches.",
 		parameters: Parameters,
 		outputSchema: Type.Object({
 			now: Type.String(),
-			timers: Type.Array(Type.Object({ id: Type.String(), at: Type.String(), message: Type.String() })),
+			timers: Type.Array(Type.Object({ id: Type.String(), at: Type.String(), message: Type.String(), repeat: Type.Optional(Type.String()) })),
 			id: Type.Optional(Type.String()),
 			at: Type.Optional(Type.String()),
 		}),
@@ -151,15 +206,21 @@ export function registerTimersFeature(pi: ExtensionAPI): void {
 			if (params.action === "set") {
 				const message = params.message?.trim() ? params.message : undefined;
 				if (!message) throw new Error("Provide instructions for the wake-up.");
-				if ((params.after === undefined) === (params.at === undefined)) throw new Error("Provide exactly one of after or at.");
-				const at = resolveTimerDeadline(params.after, params.at, Date.now());
-				const timer = { id: randomUUID(), at, message };
+				if ([params.after, params.at, params.every].filter((value) => value !== undefined).length !== 1) {
+					throw new Error("Provide exactly one of after, at or every.");
+				}
+				if (params.every === undefined && (params.time !== undefined || params.day !== undefined)) {
+					throw new Error("time and day only apply to recurring (every) timers.");
+				}
+				const repeat = params.every ? resolveRepeat(params.every, params.time, params.day) : undefined;
+				const at = repeat ? nextOccurrence(repeat, Date.now()) : resolveTimerDeadline(params.after, params.at, Date.now());
+				const timer: Timer = repeat ? { id: randomUUID(), at, message, repeat } : { id: randomUUID(), at, message };
 				timers.push(timer);
 				persist();
 				arm();
 				const details = { ...listing(), id: timer.id, at: new Date(at).toISOString() };
 				return {
-					content: [{ type: "text", text: `Timer set for ${formatTimerTime(at)} · ${formatTimerRelative(at, Date.parse(details.now))}\n${timer.id} · ${timer.message}` }],
+					content: [{ type: "text", text: `${repeat ? `Recurring timer set (${describeRepeat(repeat)}); first` : "Timer set for"} ${formatTimerTime(at)} · ${formatTimerRelative(at, Date.parse(details.now))}\n${timer.id} · ${timer.message}` }],
 					details, structuredContent: details,
 				};
 			}

@@ -110,6 +110,8 @@ timer({ action: "cancel", id: "<timer-id>" })
 
 Durations accept `s`, `m`, `h`, or `d`, including decimals. Absolute times require a full date, seconds, and `Z` or an explicit UTC offset; invalid or past deadlines are rejected. The agent should finish its turn after scheduling rather than poll. A wake-up triggers a new turn when idle or queues a follow-up when busy, carrying the saved instructions and scheduled/actual times. Timers due together are delivered together.
 
+**Recurring timers:** `timer({ action: "set", every: "daily", time: "09:00", message })` or `every: "weekly"` with `day: "monday"`. Times are local 24-hour wall-clock times and stay at that local time across daylight-saving changes. If occurrences are missed (laptop asleep or Pi closed), the timer fires **once** on wake/resume, then continues from the next future occurrence. Cancel it like any other timer.
+
 Timer results, wake-ups, and `/timers` display friendly dates and times in the machine's local timezone, including the date and timezone abbreviation. Pending timers also show relative time (for example, “in 3 minutes”). Structured tool data keeps UTC ISO timestamps unchanged.
 
 Use `/timers` to inspect pending timers, `/timers cancel <id>` to cancel one, or `/timers cancel all` to cancel every pending timer. Timers belong to the session across conversation branches; cancellation or firing is not undone by tree navigation. Reload restores deadlines. Closing or switching sessions clears live callbacks; resuming the original session delivers overdue timers once.

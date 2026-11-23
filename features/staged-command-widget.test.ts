@@ -112,3 +112,12 @@ test("approval bar stays compact on narrow screens and rebuilds hit regions on r
 	}
 	assert.deepEqual(actions, ["run", "copy", "dismiss"]);
 });
+
+test("older successful results fold to one line; failures stay open", async () => {
+	const { foldedResultLine, resultSucceeded } = await import("./staged-command-widget.ts");
+	const ok = "[command completed · exit 0]\nDisk usage\nlocal";
+	assert.equal(foldedResultLine(ok, testTheme()), "✓ staged command Disk usage · completed · exit 0");
+	assert.equal(resultSucceeded(ok), true);
+	assert.equal(resultSucceeded("[command failed · exit 1]\nx"), false);
+	assert.match(foldedResultLine("[command failed · exit 1]\nx", testTheme()), /^✗ /);
+});

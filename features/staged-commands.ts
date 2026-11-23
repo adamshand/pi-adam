@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { copyToClipboard, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { commandResultCard, StagedCommandWidget, type CommandAction } from "./staged-command-widget.ts";
+import { commandResultCard, foldedResultLine, resultSucceeded, StagedCommandWidget, type CommandAction } from "./staged-command-widget.ts";
 import { Type, type Static } from "typebox";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { captureInvocation, createCapture, readCapture } from "./staged-command-output.ts";
 
 const Parameters = Type.Object({
@@ -105,9 +105,31 @@ async function runInTerminal(ctx: ExtensionContext, command: StagedCommand): Pro
 }
 
 export function registerStagedCommandsFeature(pi: ExtensionAPI): void {
-	pi.registerMessageRenderer("staged-command-status", (message, _options, theme) => commandResultCard(
-		Array.isArray(message.content) ? message.content.filter(block => block.type === "text").map(block => block.text).join("\n") : message.content, theme,
-	));
+	// Like tool calls, a result folds to one line once the human has sent a later message.
+	// Failures stay open; Ctrl+O expands. Checked at render time so folding applies live.
+	let lastUserAt = 0;
+	pi.registerMessageRenderer("staged-command-status", (message, options, theme) => {
+		const content = Array.isArray(message.content) ? message.content.filter(block => block.type === "text").map(block => block.text).join("\n") : message.content;
+		const card = commandResultCard(content, theme);
+		const line = " ".repeat(options.outputPad) + foldedResultLine(content, theme);
+		const folded = () => !options.expanded && resultSucceeded(content) && lastUserAt > message.timestamp;
+		return {
+			render: width => folded() ? [truncateToWidth(line, Math.max(1, width), "…")] : card.render(width),
+			invalidate: () => card.invalidate(),
+		};
+	});
+	const noteUser = (message: { role?: string; timestamp?: number }) => {
+		if (message.role === "user" && message.timestamp !== undefined) lastUserAt = Math.max(lastUserAt, message.timestamp);
+	};
+	pi.on("message_start", event => noteUser(event.message));
+	pi.on("session_start", (_event, ctx) => {
+		lastUserAt = 0;
+		for (const entry of ctx.sessionManager.getBranch()) if (entry.type === "message") noteUser(entry.message);
+	});
+	pi.on("session_tree", (_event, ctx) => {
+		lastUserAt = 0;
+		for (const entry of ctx.sessionManager.getBranch()) if (entry.type === "message") noteUser(entry.message);
+	});
 	let pending: StagedCommand | undefined;
 	let sequence = 0;
 	let running = false;

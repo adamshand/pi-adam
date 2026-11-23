@@ -21,6 +21,19 @@ export function commandResultCard(content: string, theme: Theme): Component {
 	};
 }
 
+/** One dim line for an older command result, matching folded tool calls. */
+export function foldedResultLine(content: string, theme: Pick<Theme, "fg">): string {
+	const [status = "", title = ""] = content.split("\n");
+	const ok = status.startsWith("[command completed · exit 0]");
+	const summary = status.replace(/^\[command /, "").replace(/\]$/, "");
+	return `${ok ? theme.fg("success", "✓") : theme.fg("error", "✗")} ${theme.fg("muted", "staged command")}${title ? ` ${theme.fg("dim", title)}` : ""} ${theme.fg("dim", `· ${summary}`)}`;
+}
+
+/** Failed results stay open, like errored tool calls. */
+export function resultSucceeded(content: string): boolean {
+	return content.startsWith("[command completed · exit 0]");
+}
+
 export type CommandAction = "run" | "copy" | "dismiss";
 type ButtonHit = { action: CommandAction; x: number; y: number; width: number };
 export type CommandCard = { title: string; metadata?: string; location: string; command: string };

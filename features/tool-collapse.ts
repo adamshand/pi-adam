@@ -10,7 +10,7 @@ import { type Component, type TUI, truncateToWidth, visibleWidth } from "@earend
 export const KEEP_OPEN = 5;
 
 const PROBE_WIDGET_KEY = "pi-adam-tool-collapse-probe";
-const PREVIEW_ARG_KEYS = ["command", "path", "pattern", "query", "url", "code", "action", "target"];
+const PREVIEW_ARG_KEYS = ["title", "command", "path", "pattern", "query", "url", "code", "action", "target"];
 const FALLBACK_RESULT_LINES = 10;
 
 type RenderCall = NonNullable<ToolRenderers["renderCall"]>;
@@ -295,7 +295,7 @@ export function wrapToolRenderers(toolName: string, base: ToolRenderers | undefi
 			hooks.remember(context.toolCallId, context.invalidate);
 			const state = rowState(context);
 			state.folded =
-				toolName !== "stage_command" && hooks.isFolded(context.toolCallId) && !context.isPartial && !context.isError && !context.expanded;
+				hooks.isFolded(context.toolCallId) && !context.isPartial && !context.isError && !context.expanded;
 			if (state.folded) return foldedLine(toolName, args, theme, context);
 
 			const inner = base?.renderCall

@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAgentBrowserFeature } from "./features/agent-browser.ts";
+import { registerAnnotateFeature } from "./features/annotate.ts";
 import { registerCodexImageFeature } from "./features/codex-image.ts";
 import { registerStagedCommandsFeature } from "./features/staged-commands.ts";
 import { registerCompactionFeature } from "./features/compaction.ts";
@@ -22,6 +23,7 @@ import { registerTimeTrackingFeature } from "./features/time-tracking.ts";
 
 export default function piAdam(pi: ExtensionAPI): void {
 	registerAgentBrowserFeature(pi);
+	registerAnnotateFeature(pi);
 	registerCodexImageFeature(pi);
 	registerSaveImageFeature(pi);
 	registerSessionSearchFeature(pi);

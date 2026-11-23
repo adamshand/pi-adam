@@ -3,9 +3,9 @@ import { execFileSync } from "node:child_process";
 import test from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createTestExtensionApi, createTestExtensionContext } from "./test-extension.ts";
-import { formatTimerRelative, formatTimerTime, registerTimersFeature, resolveTimerDeadline } from "./timers.ts";
+import { describeRepeat, formatTimerRelative, formatTimerTime, registerTimersFeature, resolveRepeat, resolveTimerDeadline } from "./timers.ts";
 
-type Params = { action: "set" | "list" | "cancel"; after?: string; at?: string; message?: string; id?: string };
+type Params = { action: "set" | "list" | "cancel"; after?: string; at?: string; every?: "daily" | "weekly"; time?: string; day?: string; message?: string; id?: string };
 type SavedTimer = { id: string; at: number; message: string };
 type Entry = { type: "custom"; customType: string; data: { timers: SavedTimer[] } };
 type TimerDetails = { now: string; timers: { id: string; at: string; message: string }[]; id?: string; at?: string };
@@ -67,7 +67,7 @@ test("tool schema is one flat object because Copilot's Gemini models 400 on a to
 	assert.equal(parameters?.type, "object");
 	for (const key of ["anyOf", "oneOf", "allOf"]) assert.equal(key in (parameters ?? {}), false);
 	await assert.rejects(h.call({ action: "set", after: "1m" }), /instructions/);
-	await assert.rejects(h.call({ action: "set", message: "x" }), /exactly one of after or at/);
+	await assert.rejects(h.call({ action: "set", message: "x" }), /exactly one of after, at or every/);
 	await assert.rejects(h.call({ action: "set", after: "1m", at: "2099-01-01T00:00:00Z", message: "x" }), /exactly one/);
 	await assert.rejects(h.call({ action: "cancel" }), /id/);
 	h.stop();
@@ -185,4 +185,51 @@ test("long timers use bounded timeouts instead of firing immediately", async (t)
 	assert.equal(h.messages.length, 0);
 	t.mock.timers.tick(30 * 86_400_000 - 2_147_483_647);
 	assert.equal(h.messages.length, 1);
+});
+
+test("recurring rules validate local times and weekdays", () => {
+	assert.deepEqual(resolveRepeat("daily", "9:05", undefined), { every: "daily", time: "09:05" });
+	assert.deepEqual(resolveRepeat("weekly", "17:30", "Mon"), { every: "weekly", time: "17:30", day: 1 });
+	for (const [every, time, day] of [["daily", "24:00", undefined], ["daily", "9am", undefined], ["daily", "09:00", "monday"], ["weekly", "09:00", undefined], ["weekly", "09:00", "mo"]] as const) {
+		assert.throws(() => resolveRepeat(every, time, day));
+	}
+	assert.equal(describeRepeat({ every: "daily", time: "09:00" }), "daily at 9:00 am");
+	assert.equal(describeRepeat({ every: "weekly", time: "17:30", day: 1 }), "every Monday at 5:30 pm");
+});
+
+test("next occurrence keeps the local wall-clock time across days, weeks and DST", () => {
+	const source = `import { nextOccurrence } from ${JSON.stringify(new URL("./timers.ts", import.meta.url).href)};
+		const at = (iso) => new Date(nextOccurrence(...JSON.parse(iso))).toString();
+		console.log(at(JSON.stringify([{ every: "daily", time: "09:00" }, Date.parse("2026-11-23T08:00:00+13:00")])));
+		console.log(at(JSON.stringify([{ every: "daily", time: "09:00" }, Date.parse("2026-11-23T09:00:00+13:00")])));
+		console.log(at(JSON.stringify([{ every: "weekly", time: "09:00", day: 1 }, Date.parse("2026-11-24T10:00:00+13:00")])));
+		console.log(at(JSON.stringify([{ every: "daily", time: "09:00" }, Date.parse("2026-09-26T10:00:00+12:00")])));`;
+	const lines = execFileSync(process.execPath, ["--input-type=module", "-e", source], { env: { ...process.env, TZ: "Pacific/Auckland" }, encoding: "utf8" }).trim().split("\n");
+	assert.match(lines[0], /Mon Nov 23 2026 09:00:00/);
+	assert.match(lines[1], /Tue Nov 24 2026 09:00:00/, "exactly at the time means the next one");
+	assert.match(lines[2], /Mon Nov 30 2026 09:00:00/);
+	assert.match(lines[3], /Sun Sep 27 2026 09:00:00 GMT\+1300/, "DST start keeps 9am local");
+});
+
+test("recurring timers fire once after missed occurrences, then reschedule to the next future one", async (t) => {
+	t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: NOW });
+	const h = harness();
+	t.after(h.stop);
+	await assert.rejects(h.call({ action: "set", after: "1m", time: "09:00", message: "x" }), /only apply to recurring/);
+	const set = await h.call({ action: "set", every: "daily", time: "09:00", message: "Morning check" });
+	assert.match(set.content[0].text, /^Recurring timer set \(daily at 9:00 am\); first /);
+	const first = Date.parse(set.details.at!);
+	// Asleep for three days: one wake-up, not three.
+	t.mock.timers.tick(first - NOW + 3 * 86_400_000);
+	assert.equal(h.messages.length, 1);
+	assert.match(h.messages[0].content, /repeats daily at 9:00 am/);
+	const listed = (await h.call({ action: "list" })).details.timers;
+	assert.equal(listed.length, 1);
+	assert.ok(Date.parse(listed[0].at) > Date.now());
+	assert.ok(Date.parse(listed[0].at) - Date.now() <= 86_400_000);
+	t.mock.timers.tick(86_400_000);
+	assert.equal(h.messages.length, 2);
+	await h.call({ action: "cancel", id: listed[0].id });
+	t.mock.timers.tick(7 * 86_400_000);
+	assert.equal(h.messages.length, 2);
 });
