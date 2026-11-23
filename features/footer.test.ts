@@ -3,7 +3,7 @@ import test from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { registerFooterFeature } from "./footer.ts";
+import { footerProviderLabel, registerFooterFeature } from "./footer.ts";
 import { HERDR_FOOTER_HOST_LABEL, HERDR_FOOTER_LABEL } from "./herdr-app-footer.ts";
 import { sendFooterControl } from "../herdr/app/status/control-client.js";
 import { createTestExtensionApi, createTestExtensionContext } from "./test-extension.ts";
@@ -109,6 +109,7 @@ test("footer caches branch cost and context between lifecycle updates", async ()
 	);
 	const first = component.render(100)[0] ?? "";
 	const second = component.render(100)[0] ?? "";
+	assert.match(first.replace(/\x1B\[[0-9;]*m/g, ""), /^test-provider test-model/);
 	assert.equal(branchReads, 1);
 	assert.equal(contextReads, 1);
 	assert.equal(visibleWidth(first), 100);
@@ -212,6 +213,7 @@ test("Herdr uses a zero-line Pi footer and publishes refreshed session metrics",
 	);
 	assert.deepEqual(component.render(120), []);
 	assert.equal(JSON.parse(labels[HERDR_FOOTER_LABEL]).contextTokens, 250);
+	assert.equal(JSON.parse(labels[HERDR_FOOTER_LABEL]).provider, "test-provider");
 	await emit("agent_start"); // Drain the asynchronous startup Git publication.
 	assert.deepEqual(JSON.parse(labels[HERDR_FOOTER_LABEL]).git, { added: 142, removed: 38, ahead: 2, behind: 3 });
 	const endpoint = JSON.parse(labels[HERDR_FOOTER_LABEL]).controls;
@@ -243,4 +245,12 @@ test("Herdr uses a zero-line Pi footer and publishes refreshed session metrics",
 	await emit("session_shutdown");
 	assert.equal(factory, undefined);
 	assert.equal(labels[HERDR_FOOTER_LABEL], "");
+});
+
+test("provider labels shorten overlapping subscription providers and pass others through", () => {
+	assert.equal(footerProviderLabel("github-copilot"), "copilot");
+	assert.equal(footerProviderLabel("openai-codex"), "codex");
+	assert.equal(footerProviderLabel("claude-code"), "claude");
+	assert.equal(footerProviderLabel("opencode"), "opencode");
+	assert.equal(footerProviderLabel(undefined), undefined);
 });

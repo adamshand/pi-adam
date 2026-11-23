@@ -15,7 +15,8 @@ export function focusedMetrics(focus, terminals) {
     if (!data || data.version !== 1 || !text(data.owner) || !text(data.session_id)
       || !text(data.model) || !text(data.thinking) || ![null, "on", "off"].includes(data.fast)
       || !finite(data.cost) || !finite(data.contextTokens) || !finite(data.contextWindow)
-      || (data.speed !== undefined && !finite(data.speed))) return null;
+      || (data.speed !== undefined && !finite(data.speed))
+      || (data.provider !== undefined && !text(data.provider))) return null;
     const git = data.git;
     if (git !== undefined && (!git || ![git.added, git.removed].every(Number.isSafeInteger)
       || !finite(git.added) || !finite(git.removed)
@@ -97,6 +98,7 @@ export function metricParts(data, now = Date.now()) {
       if (git[key]) parts.push({ text: `${prefix}${git[key]}`, tone, kind: "git", tooltip: meaning });
     }
   }
+  if (data.provider !== undefined) parts.push({ text: data.provider, tone: "muted", kind: "provider", tooltip: "Provider serving this model" });
   parts.push(
     { text: data.model, tone: "accent", kind: "model" },
     { text: data.thinking, tone: "muted", kind: "thinking" },
@@ -147,7 +149,7 @@ export function visibleMetricParts(parts, width) {
     if (part.kind === "speed" || part.kind === "resets") return width >= 1000;
     if (part.kind === "usage") return width >= 780;
     if (part.kind === "cost" || part.kind === "git") return width >= 600;
-    if (part.kind === "thinking" || part.kind === "fast") return width >= 420;
+    if (part.kind === "thinking" || part.kind === "fast" || part.kind === "provider") return width >= 420;
     return true;
   });
 }

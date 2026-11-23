@@ -15,6 +15,7 @@ const TerminalSchema = Type.Object({ labels: Type.Record(Type.String(), Type.Str
 /** Deliberately nonsecret display data only; no transcript, credentials, or raw errors. */
 export type HerdrFooterMetrics = {
 	model: string;
+	provider?: string;
 	thinking: string;
 	fast: "on" | "off" | null;
 	cost: number;

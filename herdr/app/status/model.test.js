@@ -108,3 +108,16 @@ test("metric text retains model, mode, speed, cost, context and rate-limit healt
   assert.deepEqual(visibleMetricParts(parts, 650).map(part => part.kind), ["model", "thinking", "fast", "cost", "context"]);
   assert.deepEqual(metricParts({ ...snapshot, fast: null, speed: undefined, contextWindow: 0, usage: { status: "error" } }).map(part => part.text), ["gpt-test", "high", "$2.50", "usage !"]);
 });
+
+test("provider label shows before the model, validates, and hides on narrow windows", () => {
+  const data = { ...snapshot, provider: "copilot" };
+  const parts = metricParts(data);
+  const index = parts.findIndex(part => part.kind === "provider");
+  assert.equal(parts[index].text, "copilot");
+  assert.equal(parts[index + 1].kind, "model");
+  assert.ok(!visibleMetricParts(parts, 400).some(part => part.kind === "provider"));
+  assert.ok(visibleMetricParts(parts, 420).some(part => part.kind === "provider"));
+  assert.equal(focusedMetrics({ terminal: "t1" }, [terminal("t1", data)]).provider, "copilot");
+  assert.equal(focusedMetrics({ terminal: "t1" }, [terminal("t1", { ...data, provider: "bad\nprovider" })]), null);
+  assert.ok(!metricParts(snapshot).some(part => part.kind === "provider"));
+});

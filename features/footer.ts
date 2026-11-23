@@ -12,6 +12,19 @@ import { watchFooterGit } from "./footer-git-watch.ts";
 import { HerdrFooterBridge } from "./herdr-app-footer.ts";
 import { applyFooterAction, footerModelRotation, FooterControlServer, type FooterAction, type FooterControlEndpoint } from "./herdr-app-footer-controls.ts";
 
+/** Short labels for providers that serve overlapping model families. */
+const PROVIDER_LABELS = new Map([
+	["github-copilot", "copilot"],
+	["openai-codex", "codex"],
+	["claude-code", "claude"],
+]);
+
+/** Which provider is serving the model; the same model id can come from several. */
+export function footerProviderLabel(provider: string | undefined): string | undefined {
+	if (!provider) return undefined;
+	return PROVIDER_LABELS.get(provider) ?? provider;
+}
+
 type Rgb = readonly [red: number, green: number, blue: number];
 type ContextUsage = ReturnType<ExtensionContext["getContextUsage"]>;
 
@@ -141,6 +154,7 @@ export function registerFooterFeature(
 		}
 		return bridge.publish(ctx.sessionManager.getSessionId(), {
 			model: ctx.model?.id ?? "no-model",
+			provider: footerProviderLabel(ctx.model?.provider),
 			thinking: thinkingLevel,
 			fast: isCodexModel(ctx.model) ? fast.enabled && fast.eligible ? "on" : "off" : null,
 			cost: metrics.cost,
@@ -370,7 +384,9 @@ export function registerFooterFeature(
 						].filter(Boolean).join(" ")
 						: usage && usageHealth ? `${theme.fg("dim", "usage ")}${usageHealth}` : "";
 
-					const modelStr = colorize(palette.primary, ctx.model?.id ?? "no-model");
+					const providerLabel = footerProviderLabel(ctx.model?.provider);
+					const modelStr = (providerLabel ? theme.fg("dim", `${providerLabel} `) : "")
+						+ colorize(palette.primary, ctx.model?.id ?? "no-model");
 					const levelStr = styleThinkingLevel(theme, palette, thinkingLevel);
 					const fast = codexFast.getState();
 					const fastStr = showCodex
